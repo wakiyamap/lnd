@@ -14,11 +14,11 @@ import (
 	"github.com/roasbeef/btcd/btcec"
 
 	"github.com/go-errors/errors"
-	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/contractcourt"
-	"github.com/lightningnetwork/lnd/lnrpc"
-	"github.com/lightningnetwork/lnd/lnwallet"
-	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/contractcourt"
+	"github.com/wakiyamap/lnd/lnrpc"
+	"github.com/wakiyamap/lnd/lnwallet"
+	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
 )

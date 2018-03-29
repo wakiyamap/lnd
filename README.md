@@ -1,10 +1,10 @@
 ## Lightning Network Daemon
 
-[![Build Status](http://img.shields.io/travis/lightningnetwork/lnd.svg)](https://travis-ci.org/lightningnetwork/lnd) 
-[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/lightningnetwork/lnd/blob/master/LICENSE) 
+[![Build Status](http://img.shields.io/travis/wakiyamap/lnd.svg)](https://travis-ci.org/wakiyamap/lnd) 
+[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wakiyamap/lnd/blob/master/LICENSE) 
 [![Irc](https://img.shields.io/badge/chat-on%20freenode-brightgreen.svg)](https://webchat.freenode.net/?channels=lnd) 
-[![Godoc](https://godoc.org/github.com/lightningnetwork/lnd?status.svg)](https://godoc.org/github.com/lightningnetwork/lnd)
-[![Coverage Status](https://coveralls.io/repos/github/lightningnetwork/lnd/badge.svg?branch=master)](https://coveralls.io/github/lightningnetwork/lnd?branch=master)
+[![Godoc](https://godoc.org/github.com/wakiyamap/lnd?status.svg)](https://godoc.org/github.com/wakiyamap/lnd)
+[![Coverage Status](https://coveralls.io/repos/github/wakiyamap/lnd/badge.svg?branch=master)](https://coveralls.io/github/wakiyamap/lnd?branch=master)
 
 <img src="logo.png">
 
@@ -22,10 +22,10 @@ within it.  In the current state `lnd` is capable of:
 * Completely managing all channel states (including the exceptional ones!).
 * Maintaining a fully authenticated+validated channel graph.
 * Performing path finding within the network, passively forwarding incoming payments.
-* Sending outgoing [onion-encrypted payments](https://github.com/lightningnetwork/lightning-onion) 
+* Sending outgoing [onion-encrypted payments](https://github.com/wakiyamap/lightning-onion) 
 through the network.
 * Updating advertised fee schedules.
-* Automatic channel management ([`autopilot`](https://github.com/lightningnetwork/lnd/tree/master/autopilot)).
+* Automatic channel management ([`autopilot`](https://github.com/wakiyamap/lnd/tree/master/autopilot)).
 
 ## Lightning Network Specification Compliance
 `lnd` _fully_ conforms to the [Lightning Network specification
@@ -75,5 +75,5 @@ discuss various aspects of `lnd` and also Lightning in general.
   * [webchat](https://webchat.freenode.net/?channels=lnd)
 
 ## Further reading
-* [Step-by-step send payment guide with docker](https://github.com/lightningnetwork/lnd/tree/master/docker)
-* [Contribution guide](https://github.com/lightningnetwork/lnd/blob/master/docs/code_contribution_guidelines.md)
+* [Step-by-step send payment guide with docker](https://github.com/wakiyamap/lnd/tree/master/docker)
+* [Contribution guide](https://github.com/wakiyamap/lnd/blob/master/docs/code_contribution_guidelines.md)

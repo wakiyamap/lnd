@@ -32,35 +32,35 @@ services:
         entrypoint: ["./start-btcctl.sh"]
 
 
-    # ltc is an image of litecoin node which used as base image for ltcd and
-    # ltcctl. The environment variables default values determined on stage of
+    # mona is an image of monacoin node which used as base image for monad and
+    # monactl. The environment variables default values determined on stage of
     # container start within starting script.
-    ltc:
-      image: ltcd
+    mona:
+      image: monad
       build:
-        context: ltcd/
+        context: monad/
       volumes:
             - shared:/rpc
-            - litecoin:/data
+            - monacoin:/data
       environment:
         - RPCUSER
         - RPCPASS
         - NETWORK
 
-    ltcd:
-        extends: ltc
-        container_name: ltcd
+    monad:
+        extends: mona
+        container_name: monad
         environment:
           - DEBUG
           - MINING_ADDRESS
-        entrypoint: ["./start-ltcd.sh"]
+        entrypoint: ["./start-monad.sh"]
 
-    ltcctl:
-        extends: ltc
-        container_name: ltcctl
+    monactl:
+        extends: mona
+        container_name: monactl
         links:
-            - "ltcd:rpcserver"
-        entrypoint: ["./start-ltcctl.sh"]
+            - "monad:rpcserver"
+        entrypoint: ["./start-monactl.sh"]
 
     lnd:
         image: lnd
@@ -77,11 +77,11 @@ services:
             - shared:/rpc
         entrypoint: ["./start-lnd.sh"]
 
-    lnd_ltc:
+    lnd_mona:
       extends: lnd
-      container_name: lnd_ltc
+      container_name: lnd_mona
       links:
-          - "ltcd:blockchain"
+          - "monad:blockchain"
 
     lnd_btc:
       extends: lnd
@@ -100,7 +100,7 @@ volumes:
   bitcoin:
     driver: local
 
-  # litecoin volume is needed for maintaining blockchain persistence
-  # during ltcd container recreation.
-  litecoin:
+  # monacoin volume is needed for maintaining blockchain persistence
+  # during monad container recreation.
+  monacoin:
     driver: local

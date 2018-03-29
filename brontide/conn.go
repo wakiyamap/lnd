@@ -7,7 +7,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/roasbeef/btcd/btcec"
 )
 

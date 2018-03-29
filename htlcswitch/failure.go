@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/lightningnetwork/lightning-onion"
-	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/wakiyamap/lightning-onion"
+	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/roasbeef/btcd/btcec"
 )
 

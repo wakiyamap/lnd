@@ -11,12 +11,12 @@ import (
 
 	"github.com/coreos/bbolt"
 	"github.com/davecgh/go-spew/spew"
-	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/htlcswitch"
-	"github.com/lightningnetwork/lnd/lnwallet"
-	"github.com/lightningnetwork/lnd/lnwire"
-	"github.com/lightningnetwork/lnd/multimutex"
-	"github.com/lightningnetwork/lnd/routing/chainview"
+	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/htlcswitch"
+	"github.com/wakiyamap/lnd/lnwallet"
+	"github.com/wakiyamap/lnd/lnwire"
+	"github.com/wakiyamap/lnd/multimutex"
+	"github.com/wakiyamap/lnd/routing/chainview"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
@@ -24,7 +24,7 @@ import (
 	"crypto/sha256"
 
 	"github.com/go-errors/errors"
-	"github.com/lightningnetwork/lightning-onion"
+	"github.com/wakiyamap/lightning-onion"
 )
 
 const (

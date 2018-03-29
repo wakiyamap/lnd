@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/coreos/bbolt"
-	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/roasbeef/btcd/wire"
 )
 

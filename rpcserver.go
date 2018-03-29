@@ -20,13 +20,13 @@ import (
 
 	"github.com/coreos/bbolt"
 	"github.com/davecgh/go-spew/spew"
-	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/htlcswitch"
-	"github.com/lightningnetwork/lnd/lnrpc"
-	"github.com/lightningnetwork/lnd/lnwallet"
-	"github.com/lightningnetwork/lnd/lnwire"
-	"github.com/lightningnetwork/lnd/routing"
-	"github.com/lightningnetwork/lnd/zpay32"
+	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/htlcswitch"
+	"github.com/wakiyamap/lnd/lnrpc"
+	"github.com/wakiyamap/lnd/lnwallet"
+	"github.com/wakiyamap/lnd/lnwire"
+	"github.com/wakiyamap/lnd/routing"
+	"github.com/wakiyamap/lnd/zpay32"
 	"github.com/roasbeef/btcd/blockchain"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/chaincfg"
@@ -2157,8 +2157,8 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 	default:
 		// TODO(roasbeef): assumes set delta between versions
 		defaultDelta := cfg.Bitcoin.TimeLockDelta
-		if registeredChains.PrimaryChain() == litecoinChain {
-			defaultDelta = cfg.Litecoin.TimeLockDelta
+		if registeredChains.PrimaryChain() == monacoinChain {
+			defaultDelta = cfg.Monacoin.TimeLockDelta
 		}
 		options = append(options, zpay32.CLTVExpiry(uint64(defaultDelta)))
 	}

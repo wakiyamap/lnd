@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/lightninglabs/neutrino"
-	"github.com/ltcsuite/ltcd/btcjson"
+	"github.com/wakiyamap/monad/btcjson"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/chaincfg"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"

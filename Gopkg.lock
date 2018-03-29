@@ -24,13 +24,22 @@
     ".",
     "chacha"
   ]
-  revision = "c8d29375923a8e1d2a0f0dc0fc1d8a0aba5b97ba"
+  revision = "e0d4ab3067da29fbce5b60445bed6d54c41c3c62"
 
 [[projects]]
   branch = "master"
   name = "github.com/aead/siphash"
   packages = ["."]
   revision = "e404fcfc888570cadd1610538e2dbc89f66af814"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/aead/skein"
+  packages = [
+    ".",
+    "threefish"
+  ]
+  revision = "9365ae6e95d294dc113a0b308852f97c916db233"
 
 [[projects]]
   name = "github.com/awalterschulze/gographviz"
@@ -42,6 +51,12 @@
     "token"
   ]
   revision = "761fd5fbb34e4c2c138c280395b65b48e4ff5a53"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/bitgoin/lyra2rev2"
+  packages = ["sha3"]
+  revision = "bae9ad2043bb55facb14c4918e909f88a7d3ed84"
 
 [[projects]]
   name = "github.com/btcsuite/btclog"
@@ -91,6 +106,12 @@
   revision = "8991bc29aa16c548c550c7ff78260e27b9ab7c73"
 
 [[projects]]
+  branch = "master"
+  name = "github.com/dchest/blake256"
+  packages = ["."]
+  revision = "dee3fe6eb0e98dc774a94fc231f85baf7c29d360"
+
+[[projects]]
   name = "github.com/go-errors/errors"
   packages = ["."]
   revision = "a6af135bd4e28680facf08a3d206b454abc877a4"
@@ -129,7 +150,7 @@
   branch = "master"
   name = "github.com/juju/loggo"
   packages = ["."]
-  revision = "8232ab8918d91c72af1a9fb94d3edbe31d88b790"
+  revision = "7f1609ff1f3fcf3519ed62ccaaa9e609ea287838"
 
 [[projects]]
   name = "github.com/kkdai/bstream"
@@ -150,21 +171,6 @@
     "headerfs"
   ]
   revision = "601b7eda6e5c9e8ca91c097f0bb7be2664802ab3"
-
-[[projects]]
-  name = "github.com/lightningnetwork/lightning-onion"
-  packages = ["."]
-  revision = "c86137582e53fe3ba26681a98f911b546970893e"
-
-[[projects]]
-  name = "github.com/ltcsuite/ltcd"
-  packages = [
-    "btcjson",
-    "chaincfg",
-    "chaincfg/chainhash",
-    "wire"
-  ]
-  revision = "5f654d5faab99ee2b3488fabba98e5f7a5257ee3"
 
 [[projects]]
   name = "github.com/miekg/dns"
@@ -244,6 +250,27 @@
   revision = "1efa31f08b9333f1bd4882d61f9d668a70cd902e"
 
 [[projects]]
+  name = "github.com/wakiyamap/lightning-onion"
+  packages = ["."]
+  revision = "0e90ff3620fca585d97492c7de90f159686b2667"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/wakiyamap/lyra2rev2"
+  packages = ["."]
+  revision = "bae9ad2043bb55facb14c4918e909f88a7d3ed84"
+
+[[projects]]
+  name = "github.com/wakiyamap/monad"
+  packages = [
+    "btcjson",
+    "chaincfg",
+    "chaincfg/chainhash",
+    "wire"
+  ]
+  revision = "8139a2a986a0a52dc149e53ec3167a1ce155d3c0"
+
+[[projects]]
   name = "golang.org/x/crypto"
   packages = [
     "blake2b",
@@ -284,7 +311,7 @@
     "unix",
     "windows"
   ]
-  revision = "c28acc882ebcbfbe8ce9f0f14b9ac26ee138dd51"
+  revision = "378d26f46672a356c46195c28f61bdb4c0a781dd"
 
 [[projects]]
   name = "golang.org/x/text"
@@ -359,6 +386,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "0e386a2f0dff9303b03047f7499411379163ed3ca2b4a65161742e1b0fa23ec8"
+  inputs-digest = "a0a50189b8230ee9201c24d5f5fa9b95b64deabb23f94e9b109b6f97f3911592"
   solver-name = "gps-cdcl"
   solver-version = 1

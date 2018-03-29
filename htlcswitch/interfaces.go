@@ -1,8 +1,8 @@
 package htlcswitch
 
 import (
-	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/wire"
 )

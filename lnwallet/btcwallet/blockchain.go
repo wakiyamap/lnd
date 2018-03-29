@@ -10,7 +10,7 @@ import (
 	"github.com/roasbeef/btcutil"
 
 	"github.com/lightninglabs/neutrino"
-	"github.com/lightningnetwork/lnd/lnwallet"
+	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/roasbeef/btcwallet/chain"
 	"github.com/roasbeef/btcwallet/waddrmgr"
 )

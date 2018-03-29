@@ -4,7 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/wakiyamap/lnd/lnwire"
 )
 
 // packetQueue is an goroutine-safe queue of htlc packets which over flow the

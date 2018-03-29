@@ -7,8 +7,8 @@ import (
 	"io"
 
 	"github.com/coreos/bbolt"
-	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/lnwallet"
+	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/wire"
 )

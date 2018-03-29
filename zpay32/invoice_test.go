@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/chaincfg"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
 
-	litecoinCfg "github.com/ltcsuite/ltcd/chaincfg"
+	monacoinCfg "github.com/wakiyamap/monad/chaincfg"
 )
 
 var (
@@ -94,23 +94,23 @@ var (
 	testPaymentHash     [32]byte
 	testDescriptionHash [32]byte
 
-	ltcTestNetParams chaincfg.Params
-	ltcMainNetParams chaincfg.Params
+	monaTestNetParams chaincfg.Params
+	monaMainNetParams chaincfg.Params
 )
 
 func init() {
 	copy(testPaymentHash[:], testPaymentHashSlice[:])
 	copy(testDescriptionHash[:], testDescriptionHashSlice[:])
 
-	// Initialize litecoin testnet and mainnet params by applying key fields
+	// Initialize monacoin testnet and mainnet params by applying key fields
 	// to copies of bitcoin params.
 	// TODO(sangaman): create an interface for chaincfg.params
-	ltcTestNetParams = chaincfg.TestNet3Params
-	ltcTestNetParams.Net = wire.BitcoinNet(litecoinCfg.TestNet4Params.Net)
-	ltcTestNetParams.Bech32HRPSegwit = litecoinCfg.TestNet4Params.Bech32HRPSegwit
-	ltcMainNetParams = chaincfg.MainNetParams
-	ltcMainNetParams.Net = wire.BitcoinNet(litecoinCfg.MainNetParams.Net)
-	ltcMainNetParams.Bech32HRPSegwit = litecoinCfg.MainNetParams.Bech32HRPSegwit
+	monaTestNetParams = chaincfg.TestNet3Params
+	monaTestNetParams.Net = wire.BitcoinNet(monacoinCfg.TestNet4Params.Net)
+	monaTestNetParams.Bech32HRPSegwit = monacoinCfg.TestNet4Params.Bech32HRPSegwit
+	monaMainNetParams = chaincfg.MainNetParams
+	monaMainNetParams.Net = wire.BitcoinNet(monacoinCfg.MainNetParams.Net)
+	monaMainNetParams.Bech32HRPSegwit = monacoinCfg.MainNetParams.Bech32HRPSegwit
 }
 
 // TestDecodeEncode tests that an encoded invoice gets decoded into the expected
@@ -548,13 +548,13 @@ func TestDecodeEncode(t *testing.T) {
 			skipEncoding: true, // Skip encoding since we were given the wrong net
 		},
 		{
-			// Decode a litecoin testnet invoice
-			encodedInvoice: "lntltc241pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsnp4q0n326hr8v9zprg8gsvezcch06gfaqqhde2aj730yg0durunfhv66m2eq2fx9uctzkmj30meaghyskkgsd6geap5qg9j2ae444z24a4p8xg3a6g73p8l7d689vtrlgzj0wyx2h6atq8dfty7wmkt4frx9g9sp730h5a",
+			// Decode a monacoin testnet invoice
+			encodedInvoice: "lntmona241pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsnp4q0n326hr8v9zprg8gsvezcch06gfaqqhde2aj730yg0durunfhv66p582zl8c2phnhr3zhyty2e6q8pdchxz28r26w85zzg3ur9m2tmvptdj44k9pa20e523ku04nuec3qf0pw7988w5c35t7mzzd49qnw7cpyn0wse",
 			valid:          true,
 			decodedInvoice: func() *Invoice {
 				return &Invoice{
 					// TODO(sangaman): create an interface for chaincfg.params
-					Net:             &ltcTestNetParams,
+					Net:             &monaTestNetParams,
 					MilliSat:        &testMillisat24BTC,
 					Timestamp:       time.Unix(1496314658, 0),
 					PaymentHash:     &testPaymentHash,
@@ -564,12 +564,12 @@ func TestDecodeEncode(t *testing.T) {
 			},
 		},
 		{
-			// Decode a litecoin mainnet invoice
-			encodedInvoice: "lnltc241pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsnp4q0n326hr8v9zprg8gsvezcch06gfaqqhde2aj730yg0durunfhv66859t2d55efrxdlgqg9hdqskfstdmyssdw4fjc8qdl522ct885pqk7acn2aczh0jeht0xhuhnkmm3h0qsrxedlwm9x86787zzn4qwwwcpjkl3t2",
+			// Decode a monacoin mainnet invoice
+			encodedInvoice: "lnmona241pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsnp4q0n326hr8v9zprg8gsvezcch06gfaqqhde2aj730yg0durunfhv66wsqdsfugfgtjqkap44j4k0g6ekhh4h6y7xm2xkjyczlkqxxqmgczj3hnpqj7g0fad5ghxqd3cnmtwng8xcv6z5w63wmcdmg6qsaaegsqm2sv75",
 			valid:          true,
 			decodedInvoice: func() *Invoice {
 				return &Invoice{
-					Net:             &ltcMainNetParams,
+					Net:             &monaMainNetParams,
 					MilliSat:        &testMillisat24BTC,
 					Timestamp:       time.Unix(1496314658, 0),
 					PaymentHash:     &testPaymentHash,
@@ -687,28 +687,28 @@ func TestNewInvoice(t *testing.T) {
 			encodedInvoice: "lnbc20m1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsfpp3qjmp7lwpagxun9pygexvgpjdc4jdj85fr9yq20q82gphp2nflc7jtzrcazrra7wwgzxqc8u7754cdlpfrmccae92qgzqvzq2ps8pqqqqqqpqqqqq9qqqvpeuqafqxu92d8lr6fvg0r5gv0heeeqgcrqlnm6jhphu9y00rrhy4grqszsvpcgpy9qqqqqqgqqqqq7qqzqj9n4evl6mr5aj9f58zp6fyjzup6ywn3x6sk8akg5v4tgn2q8g4fhx05wf6juaxu9760yp46454gpg5mtzgerlzezqcqvjnhjh8z3g2qqdhhwkj",
 		},
 		{
-			// Create a litecoin testnet invoice
+			// Create a monacoin testnet invoice
 			newInvoice: func() (*Invoice, error) {
-				return NewInvoice(&ltcTestNetParams,
+				return NewInvoice(&monaTestNetParams,
 					testPaymentHash, time.Unix(1496314658, 0),
 					Amount(testMillisat24BTC),
 					DescriptionHash(testDescriptionHash),
 					Destination(testPubKey))
 			},
 			valid:          true,
-			encodedInvoice: "lntltc241pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsnp4q0n326hr8v9zprg8gsvezcch06gfaqqhde2aj730yg0durunfhv66m2eq2fx9uctzkmj30meaghyskkgsd6geap5qg9j2ae444z24a4p8xg3a6g73p8l7d689vtrlgzj0wyx2h6atq8dfty7wmkt4frx9g9sp730h5a",
+			encodedInvoice: "lntmona241pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsnp4q0n326hr8v9zprg8gsvezcch06gfaqqhde2aj730yg0durunfhv66p582zl8c2phnhr3zhyty2e6q8pdchxz28r26w85zzg3ur9m2tmvptdj44k9pa20e523ku04nuec3qf0pw7988w5c35t7mzzd49qnw7cpyn0wse",
 		},
 		{
-			// Create a litecoin mainnet invoice
+			// Create a monacoin mainnet invoice
 			newInvoice: func() (*Invoice, error) {
-				return NewInvoice(&ltcMainNetParams,
+				return NewInvoice(&monaMainNetParams,
 					testPaymentHash, time.Unix(1496314658, 0),
 					Amount(testMillisat24BTC),
 					DescriptionHash(testDescriptionHash),
 					Destination(testPubKey))
 			},
 			valid:          true,
-			encodedInvoice: "lnltc241pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsnp4q0n326hr8v9zprg8gsvezcch06gfaqqhde2aj730yg0durunfhv66859t2d55efrxdlgqg9hdqskfstdmyssdw4fjc8qdl522ct885pqk7acn2aczh0jeht0xhuhnkmm3h0qsrxedlwm9x86787zzn4qwwwcpjkl3t2",
+			encodedInvoice: "lnmona241pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsnp4q0n326hr8v9zprg8gsvezcch06gfaqqhde2aj730yg0durunfhv66wsqdsfugfgtjqkap44j4k0g6ekhh4h6y7xm2xkjyczlkqxxqmgczj3hnpqj7g0fad5ghxqd3cnmtwng8xcv6z5w63wmcdmg6qsaaegsqm2sv75",
 		},
 	}
 

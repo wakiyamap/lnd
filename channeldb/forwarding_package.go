@@ -8,7 +8,7 @@ import (
 
 	"github.com/coreos/bbolt"
 	"github.com/go-errors/errors"
-	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/wakiyamap/lnd/lnwire"
 )
 
 // ErrCorruptedFwdPkg signals that the on-disk structure of the forwarding

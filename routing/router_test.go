@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/htlcswitch"
+	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/htlcswitch"
 	"github.com/roasbeef/btcd/wire"
 
 	"github.com/davecgh/go-spew/spew"
-	"github.com/lightningnetwork/lightning-onion"
-	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/wakiyamap/lightning-onion"
+	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/roasbeef/btcd/btcec"
 )
 

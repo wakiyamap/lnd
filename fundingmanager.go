@@ -15,14 +15,14 @@ import (
 	"github.com/coreos/bbolt"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-errors/errors"
-	"github.com/lightningnetwork/lnd/chainntnfs"
-	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/htlcswitch"
-	"github.com/lightningnetwork/lnd/keychain"
-	"github.com/lightningnetwork/lnd/lnrpc"
-	"github.com/lightningnetwork/lnd/lnwallet"
-	"github.com/lightningnetwork/lnd/lnwire"
-	"github.com/lightningnetwork/lnd/routing"
+	"github.com/wakiyamap/lnd/chainntnfs"
+	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/htlcswitch"
+	"github.com/wakiyamap/lnd/keychain"
+	"github.com/wakiyamap/lnd/lnrpc"
+	"github.com/wakiyamap/lnd/lnwallet"
+	"github.com/wakiyamap/lnd/lnwire"
+	"github.com/wakiyamap/lnd/routing"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/wire"
@@ -49,12 +49,12 @@ const (
 	minBtcRemoteDelay uint16 = 144
 	maxBtcRemoteDelay uint16 = 2016
 
-	// minLtcRemoteDelay and maxLtcRemoteDelay is the extremes of the
-	// Litecoin CSV delay we will require the remote to use for its
+	// minMonaRemoteDelay and maxMonaRemoteDelay is the extremes of the
+	// Monacoin CSV delay we will require the remote to use for its
 	// commitment transaction. The actual delay we will require will be
 	// somewhere between these values, depending on channel size.
-	minLtcRemoteDelay uint16 = 576
-	maxLtcRemoteDelay uint16 = 8064
+	minMonaRemoteDelay uint16 = 960
+	maxMonaRemoteDelay uint16 = 13440
 
 	// maxWaitNumBlocksFundingConf is the maximum number of blocks to wait
 	// for the funding transaction to be confirmed before forgetting about

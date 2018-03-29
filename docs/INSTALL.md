@@ -1,7 +1,7 @@
 # Installation
 
 ### Preliminaries
-  In order to work with [`lnd`](https://github.com/lightningnetwork/lnd), the
+  In order to work with [`lnd`](https://github.com/wakiyamap/lnd), the
   following build dependencies are required:
   
   * **Go:** `lnd` is written in Go. To install, run one of the following commands:
@@ -53,8 +53,8 @@
 With the preliminary steps completed, to install `lnd`, `lncli`, and all
 related dependencies run the following commands:
 ```
-git clone https://github.com/lightningnetwork/lnd $GOPATH/src/github.com/lightningnetwork/lnd
-cd $GOPATH/src/github.com/lightningnetwork/lnd
+git clone https://github.com/wakiyamap/lnd $GOPATH/src/github.com/wakiyamap/lnd
+cd $GOPATH/src/github.com/wakiyamap/lnd
 dep ensure
 go install . ./cmd/...
 ```
@@ -64,7 +64,7 @@ go install . ./cmd/...
 To update your version of `lnd` to the latest version run the following
 commands:
 ```
-cd $GOPATH/src/github.com/lightningnetwork/lnd
+cd $GOPATH/src/github.com/wakiyamap/lnd
 git pull && dep ensure
 go install . ./cmd/...
 ```
@@ -178,13 +178,13 @@ installing `lnd` in preparation for the
 lnd --bitcoin.active --bitcoin.testnet --debuglevel=debug --btcd.rpcuser=kek --btcd.rpcpass=kek --externalip=X.X.X.X
 ```
 
-#### Running lnd using the bitcoind or litecoind backend
+#### Running lnd using the bitcoind or monacoind backend
 
-The configuration for bitcoind and litecoind are nearly identical, the following
-steps can be mirrored with loss of generality to enable a litecoind backend.
+The configuration for bitcoind and monacoind are nearly identical, the following
+steps can be mirrored with loss of generality to enable a monacoind backend.
 Setup will be described in regards to `bitcoind`, but note that `lnd` uses a
-distinct `litecoin.node=litecoind` argument and analogous subconfigurations
-prefixed by `litecoind`.
+distinct `monacoin.node=monacoind` argument and analogous subconfigurations
+prefixed by `monacoind`.
 
 To configure your bitcoind backend for use with lnd, first complete and verify
 the following:
@@ -238,7 +238,7 @@ wallet - this argument must only be used for testing purposes.
 `lnd`'s authentication system is called **macaroons**, which are decentralized
 bearer credentials allowing for delegation, attenuation, and other cool
 features. You can learn more about them in Alex Akselrod's [writeup on
-Github](https://github.com/lightningnetwork/lnd/issues/20).
+Github](https://github.com/wakiyamap/lnd/issues/20).
 
 Running `lnd` for the first time will by default generate the `admin.macaroon`,
 `read_only.macaroon`, and `macaroons.db` files that are used to authenticate
@@ -281,13 +281,13 @@ bitcoin.active=1
 ```
 
 Notice the `[Bitcoin]` section. This section houses the parameters for the
-Bitcoin chain. `lnd` also supports Litecoin testnet4 (but not both BTC and LTC
-at the same time), so when working with Litecoin be sure to set to parameters
-for Litecoin accordingly. For node configuration, the sections are called
-`[Btcd]`, `[Bitcoind]`, `[Neutrino]`, `[Ltcd]`, and `[Litecoind]` depending on
+Bitcoin chain. `lnd` also supports Monacoin testnet4 (but not both BTC and MONA
+at the same time), so when working with Monacoin be sure to set to parameters
+for Monacoin accordingly. For node configuration, the sections are called
+`[Btcd]`, `[Bitcoind]`, `[Neutrino]`, `[Monad]`, and `[Monacoind]` depending on
 which chain and node type you're using.
 
 # Accurate as of:
 - _roasbeef/btcd commit:_ `f8c02aff4e7a807ba0c1349e2db03695d8e790e8` 
 - _roasbeef/btcutil commit:_ `a259eaf2ec1b54653cdd67848a41867f280797ee` 
-- _lightningnetwork/lnd commit:_ `08de2becf8d77fae192205172c4fb17bb09bd0dbf49e64aa323b2fcbf9fe2a35`
+- _wakiyamap/lnd commit:_ `08de2becf8d77fae192205172c4fb17bb09bd0dbf49e64aa323b2fcbf9fe2a35`

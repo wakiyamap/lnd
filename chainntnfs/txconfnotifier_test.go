@@ -3,7 +3,7 @@ package chainntnfs_test
 import (
 	"testing"
 
-	"github.com/lightningnetwork/lnd/chainntnfs"
+	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"

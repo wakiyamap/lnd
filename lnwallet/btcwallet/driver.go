@@ -3,7 +3,7 @@ package btcwallet
 import (
 	"fmt"
 
-	"github.com/lightningnetwork/lnd/lnwallet"
+	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/roasbeef/btcwallet/chain"
 )
 

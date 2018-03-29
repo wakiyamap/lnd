@@ -41,23 +41,31 @@ set_default() {
 # Set default variables if needed.
 RPCUSER=$(set_default "$RPCUSER" "devuser")
 RPCPASS=$(set_default "$RPCPASS" "devpass")
-DEBUG=$(set_default "$DEBUG" "debug")
+DEBUG=$(set_default "$DEBUG" "info")
 NETWORK=$(set_default "$NETWORK" "simnet")
-CHAIN=$(set_default "$CHAIN" "bitcoin")
-BACKEND="btcd"
-if [[ "$CHAIN" == "monacoin" ]]; then
-    BACKEND="monad"
+
+PARAMS=$(echo \
+    "--$NETWORK" \
+    "--debuglevel=$DEBUG" \
+    "--rpcuser=$RPCUSER" \
+    "--rpcpass=$RPCPASS" \
+    "--datadir=/data" \
+    "--logdir=/data" \
+    "--rpccert=/rpc/rpc.cert" \
+    "--rpckey=/rpc/rpc.key" \
+    "--rpclisten=0.0.0.0" \
+    "--txindex"
+)
+
+# Set the mining flag only if address is non empty.
+if [[ -n "$MINING_ADDRESS" ]]; then
+    PARAMS="$PARAMS --miningaddr=$MINING_ADDRESS"
 fi
 
-lnd \
-    --noencryptwallet \
-    --logdir="/data" \
-    "--$CHAIN.active" \
-    "--$CHAIN.$NETWORK" \
-    "--$CHAIN.node"="btcd" \
-    "--$BACKEND.rpccert"="/rpc/rpc.cert" \
-    "--$BACKEND.rpchost"="blockchain" \
-    "--$BACKEND.rpcuser"="$RPCUSER" \
-    "--$BACKEND.rpcpass"="$RPCPASS" \
-    --debuglevel="$DEBUG" \
-    "$@"
+# Add user parameters to command.
+PARAMS="$PARAMS $@"
+
+# Print command and start bitcoin node.
+echo "Command: monad $PARAMS"
+monad $PARAMS
+

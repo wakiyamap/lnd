@@ -16,16 +16,16 @@ import (
 	"time"
 
 	"github.com/coreos/bbolt"
-	"github.com/lightningnetwork/lightning-onion"
-	"github.com/lightningnetwork/lnd/autopilot"
-	"github.com/lightningnetwork/lnd/brontide"
-	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/contractcourt"
-	"github.com/lightningnetwork/lnd/discovery"
-	"github.com/lightningnetwork/lnd/lnrpc"
-	"github.com/lightningnetwork/lnd/lnwallet"
-	"github.com/lightningnetwork/lnd/lnwire"
-	"github.com/lightningnetwork/lnd/routing"
+	"github.com/wakiyamap/lightning-onion"
+	"github.com/wakiyamap/lnd/autopilot"
+	"github.com/wakiyamap/lnd/brontide"
+	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/contractcourt"
+	"github.com/wakiyamap/lnd/discovery"
+	"github.com/wakiyamap/lnd/lnrpc"
+	"github.com/wakiyamap/lnd/lnwallet"
+	"github.com/wakiyamap/lnd/lnwire"
+	"github.com/wakiyamap/lnd/routing"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/connmgr"
@@ -33,7 +33,7 @@ import (
 	"github.com/roasbeef/btcutil"
 
 	"github.com/go-errors/errors"
-	"github.com/lightningnetwork/lnd/htlcswitch"
+	"github.com/wakiyamap/lnd/htlcswitch"
 )
 
 var (
@@ -542,8 +542,8 @@ func (s *server) Start() error {
 	// If network bootstrapping hasn't been disabled, then we'll configure
 	// the set of active bootstrappers, and launch a dedicated goroutine to
 	// maintain a set of persistent connections.
-	if !cfg.NoNetBootstrap && !(cfg.Bitcoin.SimNet || cfg.Litecoin.SimNet) &&
-		!(cfg.Bitcoin.RegTest || cfg.Litecoin.RegTest) {
+	if !cfg.NoNetBootstrap && !(cfg.Bitcoin.SimNet || cfg.Monacoin.SimNet) &&
+		!(cfg.Bitcoin.RegTest || cfg.Monacoin.RegTest) {
 
 		networkBootStrappers, err := initNetworkBootstrappers(s)
 		if err != nil {
@@ -628,7 +628,7 @@ func initNetworkBootstrappers(s *server) ([]discovery.NetworkPeerBootstrapper, e
 
 	// If this isn't simnet mode, then one of our additional bootstrapping
 	// sources will be the set of running DNS seeds.
-	if !cfg.Bitcoin.SimNet || !cfg.Litecoin.SimNet {
+	if !cfg.Bitcoin.SimNet || !cfg.Monacoin.SimNet {
 		dnsSeeds, ok := chainDNSSeeds[*activeNetParams.GenesisHash]
 
 		// If we have a set of DNS seeds for this chain, then we'll add

@@ -36,15 +36,15 @@ import (
 
 	proxy "github.com/grpc-ecosystem/grpc-gateway/runtime"
 	flags "github.com/jessevdk/go-flags"
-	"github.com/lightningnetwork/lnd/autopilot"
-	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/keychain"
-	"github.com/lightningnetwork/lnd/lnrpc"
-	"github.com/lightningnetwork/lnd/lnwallet"
-	"github.com/lightningnetwork/lnd/lnwallet/btcwallet"
-	"github.com/lightningnetwork/lnd/lnwire"
-	"github.com/lightningnetwork/lnd/macaroons"
-	"github.com/lightningnetwork/lnd/walletunlocker"
+	"github.com/wakiyamap/lnd/autopilot"
+	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/keychain"
+	"github.com/wakiyamap/lnd/lnrpc"
+	"github.com/wakiyamap/lnd/lnwallet"
+	"github.com/wakiyamap/lnd/lnwallet/btcwallet"
+	"github.com/wakiyamap/lnd/lnwire"
+	"github.com/wakiyamap/lnd/macaroons"
+	"github.com/wakiyamap/lnd/walletunlocker"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
@@ -108,10 +108,10 @@ func lndMain() error {
 
 	var network string
 	switch {
-	case cfg.Bitcoin.TestNet3 || cfg.Litecoin.TestNet3:
+	case cfg.Bitcoin.TestNet3 || cfg.Monacoin.TestNet3:
 		network = "testnet"
 
-	case cfg.Bitcoin.MainNet || cfg.Litecoin.MainNet:
+	case cfg.Bitcoin.MainNet || cfg.Monacoin.MainNet:
 		network = "mainnet"
 
 	case cfg.Bitcoin.SimNet:
@@ -265,14 +265,14 @@ func lndMain() error {
 	registeredChains.RegisterChain(primaryChain, activeChainControl)
 
 	// Select the configuration and furnding parameters for Bitcoin or
-	// Litecoin, depending on the primary registered chain.
+	// MOnacoin, depending on the primary registered chain.
 	chainCfg := cfg.Bitcoin
 	minRemoteDelay := minBtcRemoteDelay
 	maxRemoteDelay := maxBtcRemoteDelay
-	if primaryChain == litecoinChain {
-		chainCfg = cfg.Litecoin
-		minRemoteDelay = minLtcRemoteDelay
-		maxRemoteDelay = maxLtcRemoteDelay
+	if primaryChain == monacoinChain {
+		chainCfg = cfg.Monacoin
+		minRemoteDelay = minMonaRemoteDelay
+		maxRemoteDelay = maxMonaRemoteDelay
 	}
 
 	// TODO(roasbeef): add rotation
@@ -371,8 +371,8 @@ func lndMain() error {
 			// in the case this gets re-orged out, and
 			// we will require more confirmations before
 			// we consider it open.
-			// TODO(halseth): Use Litecoin params in case
-			// of LTC channels.
+			// TODO(halseth): Use Monacoin params in case
+			// of MONA channels.
 
 			// In case the user has explicitly specified
 			// a default value for the number of
@@ -405,7 +405,7 @@ func lndMain() error {
 			// close) linearly from minRemoteDelay blocks
 			// for small channels, to maxRemoteDelay blocks
 			// for channels of size maxFundingAmount.
-			// TODO(halseth): Litecoin parameter for LTC.
+			// TODO(halseth): Monacoin parameter for MONA.
 
 			// In case the user has explicitly specified
 			// a default value for the remote delay, we
@@ -520,7 +520,7 @@ func lndMain() error {
 	// continue the start up of the remainder of the daemon. This ensures
 	// that we don't accept any possibly invalid state transitions, or
 	// accept channels with spent funds.
-	if !(cfg.Bitcoin.SimNet || cfg.Litecoin.SimNet) {
+	if !(cfg.Bitcoin.SimNet || cfg.Monacoin.SimNet) {
 		_, bestHeight, err := activeChainControl.chainIO.GetBestBlock()
 		if err != nil {
 			return err
@@ -826,8 +826,8 @@ func waitForWalletPassword(grpcEndpoints, restEndpoints []string,
 	grpcServer := grpc.NewServer(serverOpts...)
 
 	chainConfig := cfg.Bitcoin
-	if registeredChains.PrimaryChain() == litecoinChain {
-		chainConfig = cfg.Litecoin
+	if registeredChains.PrimaryChain() == monacoinChain {
+		chainConfig = cfg.Monacoin
 	}
 	pwService := walletunlocker.New(macaroonService,
 		chainConfig.ChainDir, activeNetParams.Params)
