@@ -29,7 +29,6 @@ import (
 	"github.com/wakiyamap/lnd/zpay32"
 	"github.com/roasbeef/btcd/blockchain"
 	"github.com/roasbeef/btcd/btcec"
-	"github.com/roasbeef/btcd/chaincfg"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/txscript"
 	"github.com/roasbeef/btcd/wire"
@@ -1031,12 +1030,6 @@ func (r *rpcServer) CloseChannel(in *lnrpc.CloseChannelRequest,
 			r.server.htlcSwitch.RemoveLink(chanID)
 		}
 
-		select {
-		case r.server.breachArbiter.settledContracts <- *chanPoint:
-		case <-r.quit:
-			return fmt.Errorf("server shutting down")
-		}
-
 		// With the necessary indexes cleaned up, we'll now force close
 		// the channel.
 		chainArbitrator := r.server.chainArb
@@ -1230,7 +1223,7 @@ func (r *rpcServer) GetInfo(ctx context.Context,
 		BlockHeight:         uint32(bestHeight),
 		BlockHash:           bestHash.String(),
 		SyncedToChain:       isSynced,
-		Testnet:             activeNetParams.Params == &chaincfg.TestNet3Params,
+		Testnet:             isTestnet(&activeNetParams),
 		Chains:              activeChains,
 		Uris:                uris,
 		Alias:               nodeAnn.Alias.String(),

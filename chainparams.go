@@ -3,10 +3,11 @@ package main
 import (
 	"github.com/wakiyamap/lnd/keychain"
 	monacoinCfg "github.com/wakiyamap/monad/chaincfg"
+	monacoinWire "github.com/wakiyamap/monad/wire"
 	"github.com/roasbeef/btcd/chaincfg"
 	bitcoinCfg "github.com/roasbeef/btcd/chaincfg"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
-	"github.com/roasbeef/btcd/wire"
+	bitcoinWire "github.com/roasbeef/btcd/wire"
 )
 
 // activeNetParams is a pointer to the parameters specific to the currently
@@ -82,7 +83,7 @@ var regTestNetParams = bitcoinNetParams{
 // abstract over _which_ chain (or fork) the parameters are for.
 func applyMonacoinParams(params *bitcoinNetParams, monacoinParams *monacoinNetParams) {
 	params.Name = monacoinParams.Name
-	params.Net = wire.BitcoinNet(monacoinParams.Net)
+	params.Net = bitcoinWire.BitcoinNet(monacoinParams.Net)
 	params.DefaultPort = monacoinParams.DefaultPort
 	params.CoinbaseMaturity = monacoinParams.CoinbaseMaturity
 
@@ -114,4 +115,15 @@ func applyMonacoinParams(params *bitcoinNetParams, monacoinParams *monacoinNetPa
 	params.Checkpoints = checkPoints
 	params.rpcPort = monacoinParams.rpcPort
 	params.CoinType = monacoinParams.CoinType
+}
+
+// isTestnet tests if the given params correspond to a testnet
+// parameter configuration.
+func isTestnet(params *bitcoinNetParams) bool {
+	switch params.Params.Net {
+	case bitcoinWire.TestNet3, bitcoinWire.BitcoinNet(monacoinWire.TestNet4):
+		return true
+	default:
+		return false
+	}
 }

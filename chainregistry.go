@@ -43,7 +43,7 @@ const (
 	defaultMonacoinFeeRate       = lnwire.MilliSatoshi(1)
 	defaultMonacoinTimeLockDelta = 960
 	defaultMonacoinStaticFeeRate = lnwallet.SatPerVByte(200)
-	defaultMonacoinMinRelayFee   = btcutil.Amount(10000)
+	defaultMonacoinDustLimit     = btcutil.Amount(54600)
 )
 
 // defaultBtcChannelConstraints is the default set of channel constraints that are
@@ -58,7 +58,7 @@ var defaultBtcChannelConstraints = channeldb.ChannelConstraints{
 // defaultMonaChannelConstraints is the default set of channel constraints that are
 // meant to be used when initially funding a Monacoin channel.
 var defaultMonaChannelConstraints = channeldb.ChannelConstraints{
-	DustLimit:        defaultMonacoinMinRelayFee,
+	DustLimit:        defaultMonacoinDustLimit,
 	MaxAcceptedHtlcs: lnwallet.MaxHTLCNumber / 2,
 }
 
@@ -246,6 +246,7 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 		// database.
 		walletConfig.ChainSource = chain.NewNeutrinoClient(svc)
 		cleanUp = func() {
+			svc.Stop()
 			nodeDatabase.Close()
 		}
 	case "bitcoind", "monacoind":
