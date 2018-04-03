@@ -634,7 +634,8 @@ var (
 
 		monacoinMainnetGenesis: {
 			{
-				"ns1.lndnode.tamami-foundation.org",
+				"ns1.lndnode.nodes.directory",
+				"ns2.lndnode.nodes.directory",
 			},
 		},
 	}
