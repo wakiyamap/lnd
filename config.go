@@ -195,8 +195,9 @@ type config struct {
 
 	TrickleDelay int `long:"trickledelay" description:"Time in milliseconds between each release of announcements to the network"`
 
-	Alias string `long:"alias" description:"The node alias. Used as a moniker by peers and intelligence services"`
-	Color string `long:"color" description:"The color of the node in hex format (i.e. '#3399FF'). Used to customize node appearance in intelligence services"`
+	Alias       string `long:"alias" description:"The node alias. Used as a moniker by peers and intelligence services"`
+	Color       string `long:"color" description:"The color of the node in hex format (i.e. '#3399FF'). Used to customize node appearance in intelligence services"`
+	MinChanSize int64  `long:"minchansize" description:"The smallest channel size (in satoshis) that we should accept. Incoming channels smaller than this will be rejected"`
 
 	net torsvc.Net
 }
@@ -264,6 +265,7 @@ func loadConfig() (*config, error) {
 		TrickleDelay: defaultTrickleDelay,
 		Alias:        defaultAlias,
 		Color:        defaultColor,
+		MinChanSize:  int64(minChanFundingSize),
 	}
 
 	// Pre-parse the command line options to pick up an alternative config
@@ -976,7 +978,7 @@ func extractBtcdRPCParams(btcdConfigPath string) (string, string, error) {
 	// Attempt to locate the RPC user using a regular expression. If we
 	// don't have a match for our regular expression then we'll exit with
 	// an error.
-	rpcUserRegexp, err := regexp.Compile(`(?m)^\s*rpcuser=([^\s]+)`)
+	rpcUserRegexp, err := regexp.Compile(`(?m)^\s*rpcuser\s*=\s*([^\s]+)`)
 	if err != nil {
 		return "", "", err
 	}
@@ -988,7 +990,7 @@ func extractBtcdRPCParams(btcdConfigPath string) (string, string, error) {
 	// Similarly, we'll use another regular expression to find the set
 	// rpcpass (if any). If we can't find the pass, then we'll exit with an
 	// error.
-	rpcPassRegexp, err := regexp.Compile(`(?m)^\s*rpcpass=([^\s]+)`)
+	rpcPassRegexp, err := regexp.Compile(`(?m)^\s*rpcpass\s*=\s*([^\s]+)`)
 	if err != nil {
 		return "", "", err
 	}
@@ -1024,7 +1026,7 @@ func extractBitcoindRPCParams(bitcoindConfigPath string) (string, string, string
 
 	// First, we look for the ZMQ path for raw blocks. If raw transactions
 	// are sent over this interface, we can also get unconfirmed txs.
-	zmqPathRE, err := regexp.Compile(`(?m)^\s*zmqpubrawblock=([^\s]+)`)
+	zmqPathRE, err := regexp.Compile(`(?m)^\s*zmqpubrawblock\s*=\s*([^\s]+)`)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -1036,7 +1038,7 @@ func extractBitcoindRPCParams(bitcoindConfigPath string) (string, string, string
 	// Next, we'll try to find an auth cookie. We need to detect the chain
 	// by seeing if one is specified in the configuration file.
 	dataDir := path.Dir(bitcoindConfigPath)
-	dataDirRE, err := regexp.Compile(`(?m)^\s*datadir=([^\s]+)`)
+	dataDirRE, err := regexp.Compile(`(?m)^\s*datadir\s*=\s*([^\s]+)`)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -1067,7 +1069,7 @@ func extractBitcoindRPCParams(bitcoindConfigPath string) (string, string, string
 	// We didn't find a cookie, so we attempt to locate the RPC user using
 	// a regular expression. If we  don't have a match for our regular
 	// expression then we'll exit with an error.
-	rpcUserRegexp, err := regexp.Compile(`(?m)^\s*rpcuser=([^\s]+)`)
+	rpcUserRegexp, err := regexp.Compile(`(?m)^\s*rpcuser\s*=\s*([^\s]+)`)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -1079,7 +1081,7 @@ func extractBitcoindRPCParams(bitcoindConfigPath string) (string, string, string
 	// Similarly, we'll use another regular expression to find the set
 	// rpcpass (if any). If we can't find the pass, then we'll exit with an
 	// error.
-	rpcPassRegexp, err := regexp.Compile(`(?m)^\s*rpcpassword=([^\s]+)`)
+	rpcPassRegexp, err := regexp.Compile(`(?m)^\s*rpcpassword\s*=\s*([^\s]+)`)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -1099,7 +1101,13 @@ func normalizeAddresses(addrs []string, defaultPort string) []string {
 	seen := map[string]struct{}{}
 	for _, addr := range addrs {
 		if _, _, err := net.SplitHostPort(addr); err != nil {
-			addr = net.JoinHostPort(addr, defaultPort)
+			// If the address is an integer, then we assume it is *only* a
+			// port and default to binding to that port on localhost
+			if _, err := strconv.Atoi(addr); err == nil {
+				addr = net.JoinHostPort("localhost", addr)
+			} else {
+				addr = net.JoinHostPort(addr, defaultPort)
+			}
 		}
 		if _, ok := seen[addr]; !ok {
 			result = append(result, addr)
