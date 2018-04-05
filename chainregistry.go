@@ -634,8 +634,8 @@ var (
 
 		monacoinMainnetGenesis: {
 			{
-				"ns1.lnd.nodes.directory",
-				"ns2.lnd.nodes.directory",
+				"lnd.nodes.directory",
+				"soa.lnd.nodes.directory",
 			},
 		},
 	}
