@@ -49,7 +49,7 @@ if [[ "$CHAIN" == "monacoin" ]]; then
     BACKEND="monad"
 fi
 
-lnd \
+exec lnd \
     --noencryptwallet \
     --logdir="/data" \
     "--$CHAIN.active" \

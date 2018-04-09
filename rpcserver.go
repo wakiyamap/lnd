@@ -1071,6 +1071,16 @@ func (r *rpcServer) CloseChannel(in *lnrpc.CloseChannelRequest,
 				}
 			})
 	} else {
+		// If the link is not known by the switch, we cannot gracefully close
+		// the channel.
+		channelID := lnwire.NewChanIDFromOutPoint(chanPoint)
+		if _, err := r.server.htlcSwitch.GetLink(channelID); err != nil {
+			rpcsLog.Debugf("Trying to non-force close offline channel with "+
+				"chan_point=%v", chanPoint)
+			return fmt.Errorf("unable to gracefully close channel while peer "+
+				"is offline (try force closing it instead): %v", err)
+		}
+
 		// Based on the passed fee related parameters, we'll determine
 		// an appropriate fee rate for the cooperative closure
 		// transaction.
@@ -1330,14 +1340,19 @@ func (r *rpcServer) ChannelBalance(ctx context.Context,
 		return nil, err
 	}
 
-	var balance btcutil.Amount
+	var pendingOpenBalance, balance btcutil.Amount
 	for _, channel := range channels {
-		if !channel.IsPending {
+		if channel.IsPending {
+			pendingOpenBalance += channel.LocalCommitment.LocalBalance.ToSatoshis()
+		} else {
 			balance += channel.LocalCommitment.LocalBalance.ToSatoshis()
 		}
 	}
 
-	return &lnrpc.ChannelBalanceResponse{Balance: int64(balance)}, nil
+	return &lnrpc.ChannelBalanceResponse{
+		Balance:            int64(balance),
+		PendingOpenBalance: int64(pendingOpenBalance),
+	}, nil
 }
 
 // PendingChannels returns a list of all the channels that are currently
@@ -3316,7 +3331,7 @@ func (r *rpcServer) UpdateChannelPolicy(ctx context.Context,
 		TimeLockDelta: req.TimeLockDelta,
 	}
 
-	rpcsLog.Tracef("[updatechanpolicy] updating channel policy base_fee=%v, "+
+	rpcsLog.Debugf("[updatechanpolicy] updating channel policy base_fee=%v, "+
 		"rate_float=%v, rate_fixed=%v, time_lock_delta: %v, targets=%v",
 		req.BaseFeeMsat, req.FeeRate, feeRateFixed, req.TimeLockDelta,
 		spew.Sdump(targetChans))

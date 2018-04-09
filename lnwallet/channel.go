@@ -1881,8 +1881,9 @@ func NewBreachRetribution(chanState *channeldb.OpenChannel, stateNum uint64,
 	if err != nil {
 		return nil, err
 	}
-	commitmentSecret, commitmentPoint := btcec.PrivKeyFromBytes(btcec.S256(),
-		revocationPreimage[:])
+	commitmentSecret, commitmentPoint := btcec.PrivKeyFromBytes(
+		btcec.S256(), revocationPreimage[:],
+	)
 
 	// With the commitment point generated, we can now generate the four
 	// keys we'll need to reconstruct the commitment state,
@@ -1893,8 +1894,9 @@ func NewBreachRetribution(chanState *channeldb.OpenChannel, stateNum uint64,
 	// number so we can have the proper witness script to sign and include
 	// within the final witness.
 	remoteDelay := uint32(chanState.RemoteChanCfg.CsvDelay)
-	remotePkScript, err := commitScriptToSelf(remoteDelay, keyRing.DelayKey,
-		keyRing.RevocationKey)
+	remotePkScript, err := commitScriptToSelf(
+		remoteDelay, keyRing.DelayKey, keyRing.RevocationKey,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1969,12 +1971,22 @@ func NewBreachRetribution(chanState *channeldb.OpenChannel, stateNum uint64,
 	// With the commitment outputs located, we'll now generate all the
 	// retribution structs for each of the HTLC transactions active on the
 	// remote commitment transaction.
-	htlcRetributions := make([]HtlcRetribution, len(revokedSnapshot.Htlcs))
-	for i, htlc := range revokedSnapshot.Htlcs {
+	htlcRetributions := make([]HtlcRetribution, 0, len(revokedSnapshot.Htlcs))
+	for _, htlc := range revokedSnapshot.Htlcs {
 		var (
 			htlcScript []byte
 			err        error
 		)
+
+		// If the HTLC is dust, then we'll skip it as it doesn't have
+		// an output on the commitment transaction.
+		if htlcIsDust(
+			htlc.Incoming, false,
+			SatPerKWeight(revokedSnapshot.FeePerKw),
+			htlc.Amt.ToSatoshis(), chanState.RemoteChanCfg.DustLimit,
+		) {
+			continue
+		}
 
 		// We'll generate the original second level witness script now,
 		// as we'll need it if we're revoking an HTLC output on the
@@ -1992,17 +2004,17 @@ func NewBreachRetribution(chanState *channeldb.OpenChannel, stateNum uint64,
 		// re-generate the sender HTLC script.
 		if htlc.Incoming {
 			htlcScript, err = senderHTLCScript(
-				keyRing.LocalHtlcKey, keyRing.RemoteHtlcKey,
+				keyRing.RemoteHtlcKey, keyRing.LocalHtlcKey,
 				keyRing.RevocationKey, htlc.RHash[:],
 			)
 			if err != nil {
 				return nil, err
 			}
 
-			// Otherwise, is this was an outgoing HTLC that we sent, then
-			// from the PoV of the remote commitment state, they're the
-			// receiver of this HTLC.
 		} else {
+			// Otherwise, is this was an outgoing HTLC that we
+			// sent, then from the PoV of the remote commitment
+			// state, they're the receiver of this HTLC.
 			htlcScript, err = receiverHTLCScript(
 				htlc.RefundTimeout, keyRing.LocalHtlcKey,
 				keyRing.RemoteHtlcKey, keyRing.RevocationKey,
@@ -2013,7 +2025,7 @@ func NewBreachRetribution(chanState *channeldb.OpenChannel, stateNum uint64,
 			}
 		}
 
-		htlcRetributions[i] = HtlcRetribution{
+		htlcRetributions = append(htlcRetributions, HtlcRetribution{
 			SignDesc: SignDescriptor{
 				KeyDesc:       chanState.LocalChanCfg.RevocationBasePoint,
 				DoubleTweak:   commitmentSecret,
@@ -2029,7 +2041,7 @@ func NewBreachRetribution(chanState *channeldb.OpenChannel, stateNum uint64,
 			},
 			SecondLevelWitnessScript: secondLevelWitnessScript,
 			IsIncoming:               htlc.Incoming,
-		}
+		})
 	}
 
 	// Finally, with all the necessary data constructed, we can create the
@@ -2582,9 +2594,11 @@ func genRemoteHtlcSigJobs(keyRing *CommitmentKeyRing,
 			Hash:  txHash,
 			Index: uint32(htlc.remoteOutputIndex),
 		}
-		sigJob.tx, err = createHtlcTimeoutTx(op, outputAmt,
-			htlc.Timeout, uint32(remoteChanCfg.CsvDelay),
-			keyRing.RevocationKey, keyRing.DelayKey)
+		sigJob.tx, err = createHtlcTimeoutTx(
+			op, outputAmt, htlc.Timeout,
+			uint32(remoteChanCfg.CsvDelay),
+			keyRing.RevocationKey, keyRing.DelayKey,
+		)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -2632,9 +2646,10 @@ func genRemoteHtlcSigJobs(keyRing *CommitmentKeyRing,
 			Hash:  txHash,
 			Index: uint32(htlc.remoteOutputIndex),
 		}
-		sigJob.tx, err = createHtlcSuccessTx(op, outputAmt,
-			uint32(remoteChanCfg.CsvDelay), keyRing.RevocationKey,
-			keyRing.DelayKey)
+		sigJob.tx, err = createHtlcSuccessTx(
+			op, outputAmt, uint32(remoteChanCfg.CsvDelay),
+			keyRing.RevocationKey, keyRing.DelayKey,
+		)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -3483,19 +3498,22 @@ func genHtlcSigValidationJobs(localCommitmentView *commitment,
 	i := 0
 	for index := range localCommitmentView.txn.TxOut {
 		var (
-			sigHash func() ([]byte, error)
-			sig     *btcec.Signature
-			err     error
+			htlcIndex uint64
+			sigHash   func() ([]byte, error)
+			sig       *btcec.Signature
+			err       error
 		)
 
 		outputIndex := int32(index)
 		switch {
 
-		// If this output index is found within the incoming HTLC index,
-		// then this means that we need to generate an HTLC success
-		// transaction in order to validate the signature.
+		// If this output index is found within the incoming HTLC
+		// index, then this means that we need to generate an HTLC
+		// success transaction in order to validate the signature.
 		case localCommitmentView.incomingHTLCIndex[outputIndex] != nil:
 			htlc := localCommitmentView.incomingHTLCIndex[outputIndex]
+
+			htlcIndex = htlc.HtlcIndex
 
 			sigHash = func() ([]byte, error) {
 				op := wire.OutPoint{
@@ -3546,6 +3564,8 @@ func genHtlcSigValidationJobs(localCommitmentView *commitment,
 		// signature presented.
 		case localCommitmentView.outgoingHTLCIndex[outputIndex] != nil:
 			htlc := localCommitmentView.outgoingHTLCIndex[outputIndex]
+
+			htlcIndex = htlc.HtlcIndex
 
 			sigHash = func() ([]byte, error) {
 				op := wire.OutPoint{
@@ -3598,9 +3618,10 @@ func genHtlcSigValidationJobs(localCommitmentView *commitment,
 		}
 
 		verifyJobs = append(verifyJobs, verifyJob{
-			pubKey:  keyRing.RemoteHtlcKey,
-			sig:     sig,
-			sigHash: sigHash,
+			htlcIndex: htlcIndex,
+			pubKey:    keyRing.RemoteHtlcKey,
+			sig:       sig,
+			sigHash:   sigHash,
 		})
 
 		i++
@@ -3617,7 +3638,7 @@ func genHtlcSigValidationJobs(localCommitmentView *commitment,
 }
 
 // InvalidCommitSigError is a struct that implements the error interface to
-// report a failure to validation a commitment signature for a remote peer.
+// report a failure to validate a commitment signature for a remote peer.
 // We'll use the items in this struct to generate a rich error message for the
 // remote peer when we receive an invalid signature from it. Doing so can
 // greatly aide in debugging cross implementation issues.
@@ -3635,8 +3656,37 @@ type InvalidCommitSigError struct {
 // caused an invalid commitment signature.
 func (i *InvalidCommitSigError) Error() string {
 	return fmt.Sprintf("rejected commitment: commit_height=%v, "+
-		"invalid_sig=%x, commit_tx=%x, sig_hash=%x", i.commitHeight,
+		"invalid_commit_sig=%x, commit_tx=%x, sig_hash=%x", i.commitHeight,
 		i.commitSig[:], i.commitTx, i.sigHash[:])
+}
+
+// A compile time flag to ensure that InvalidCommitSigError implements the
+// error interface.
+var _ error = (*InvalidCommitSigError)(nil)
+
+// InvalidCommitSigError is a struc that implements the error interface to
+// report a failure to validate an htlc signature from a remote peer. We'll use
+// the items in this struct to generate a rich error message for the remote
+// peer when we receive an invalid signature from it. Doing so can greatly aide
+// in debugging across implementation issues.
+type InvalidHtlcSigError struct {
+	commitHeight uint64
+
+	htlcSig []byte
+
+	htlcIndex uint64
+
+	sigHash []byte
+
+	commitTx []byte
+}
+
+// Error returns a detailed error string including the exact transaction that
+// caused an invalid htlc signature.
+func (i *InvalidHtlcSigError) Error() string {
+	return fmt.Sprintf("rejected commitment: commit_height=%v, "+
+		"invalid_htlc_sig=%x, commit_tx=%x, sig_hash=%x", i.commitHeight,
+		i.htlcSig, i.commitTx, i.sigHash[:])
 }
 
 // A compile time flag to ensure that InvalidCommitSigError implements the
@@ -3772,10 +3822,30 @@ func (lc *LightningChannel) ReceiveNewCommitment(commitSig lnwire.Sig,
 		// In the case that a single signature is invalid, we'll exit
 		// early and cancel all the outstanding verification jobs.
 		select {
-		case err := <-verifyResps:
-			if err != nil {
+		case htlcErr := <-verifyResps:
+			if htlcErr != nil {
 				close(cancelChan)
-				return fmt.Errorf("invalid htlc signature: %v", err)
+
+				sig, err := lnwire.NewSigFromSignature(
+					htlcErr.sig,
+				)
+				if err != nil {
+					return err
+				}
+				sigHash, err := htlcErr.sigHash()
+				if err != nil {
+					return err
+				}
+
+				var txBytes bytes.Buffer
+				localCommitTx.Serialize(&txBytes)
+				return &InvalidHtlcSigError{
+					commitHeight: nextHeight,
+					htlcSig:      sig.ToSignatureBytes(),
+					htlcIndex:    htlcErr.htlcIndex,
+					sigHash:      sigHash,
+					commitTx:     txBytes.Bytes(),
+				}
 			}
 		case <-lc.quit:
 			return fmt.Errorf("channel shutting down")
