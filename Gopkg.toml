@@ -48,7 +48,7 @@
 
 [[constraint]]
   name = "github.com/wakiyamap/monad"
-  revision = "8139a2a986a0a52dc149e53ec3167a1ce155d3c0"
+  revision = "80b796468543be90e81cf64a8dd0c53e9af254f1"
 
 [[constraint]]
   name = "github.com/miekg/dns"

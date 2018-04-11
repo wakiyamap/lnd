@@ -268,7 +268,7 @@
     "chaincfg/chainhash",
     "wire"
   ]
-  revision = "8139a2a986a0a52dc149e53ec3167a1ce155d3c0"
+  revision = "80b796468543be90e81cf64a8dd0c53e9af254f1"
 
 [[projects]]
   name = "golang.org/x/crypto"
@@ -386,6 +386,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "8465ed474ea20288bec0b8efa61d41b7c21f1eb6d26374411b800bffe1529922"
+  inputs-digest = "f8505ac579c1268948f592b682d6ff9f03d7c2d94c43328e9fd7b06666e938cb"
   solver-name = "gps-cdcl"
   solver-version = 1
