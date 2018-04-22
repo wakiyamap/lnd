@@ -704,7 +704,7 @@ func TestSimpleAddSettleWorkflow(t *testing.T) {
 	// At this point, Bob should have 6 BTC settled, with Alice still having
 	// 4 BTC. Alice's channel should show 1 BTC sent and Bob's channel
 	// should show 1 BTC received. They should also be at commitment height
-	// two, with the revocation window extended by by 1 (5).
+	// two, with the revocation window extended by 1 (5).
 	mSatTransferred := lnwire.NewMSatFromSatoshis(btcutil.SatoshiPerBitcoin)
 	if aliceChannel.channelState.TotalMSatSent != mSatTransferred {
 		t.Fatalf("alice satoshis sent incorrect %v vs %v expected",
@@ -3026,7 +3026,7 @@ func TestChanSyncOweCommitment(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			settleMsg, ok := aliceMsgsToSend[i].(*lnwire.UpdateFulfillHTLC)
 			if !ok {
-				t.Fatalf("expected a htlc settle message, "+
+				t.Fatalf("expected an HTLC settle message, "+
 					"instead have %v", spew.Sdump(settleMsg))
 			}
 			if settleMsg.ID != uint64(i) {
@@ -3045,7 +3045,7 @@ func TestChanSyncOweCommitment(t *testing.T) {
 
 		// The HTLC add message should be identical.
 		if _, ok := aliceMsgsToSend[3].(*lnwire.UpdateAddHTLC); !ok {
-			t.Fatalf("expected a htlc add message, instead have %v",
+			t.Fatalf("expected an HTLC add message, instead have %v",
 				spew.Sdump(aliceMsgsToSend[3]))
 		}
 		if !reflect.DeepEqual(aliceHtlc, aliceMsgsToSend[3]) {
@@ -3777,7 +3777,7 @@ func TestFeeUpdateRejectInsaneFee(t *testing.T) {
 	startingFeeRate := SatPerKWeight(aliceChannel.channelState.LocalCommitment.FeePerKw)
 	newFeeRate := startingFeeRate * 1000000
 
-	// Both Alice and Bob should reject this new fee rate as it it far too
+	// Both Alice and Bob should reject this new fee rate as it is far too
 	// large.
 	if err := aliceChannel.UpdateFee(newFeeRate); err == nil {
 		t.Fatalf("alice should have rejected fee update")
@@ -4620,7 +4620,7 @@ func TestDesyncHTLCs(t *testing.T) {
 		t.Fatalf("unable to complete state update: %v", err)
 	}
 
-	// Now let let Bob fail this HTLC.
+	// Now let Bob fail this HTLC.
 	err = bobChannel.FailHTLC(bobIndex, []byte("failreason"), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("unable to cancel HTLC: %v", err)

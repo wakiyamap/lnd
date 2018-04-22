@@ -24,7 +24,7 @@
     ".",
     "chacha"
   ]
-  revision = "e0d4ab3067da29fbce5b60445bed6d54c41c3c62"
+  revision = "c1766ed472dff2392a1a13de7b82e8f5a64ab11d"
 
 [[projects]]
   branch = "master"
@@ -197,7 +197,7 @@
     "txscript",
     "wire"
   ]
-  revision = "3b7cd0380ae14f7ae01703f04b5120bf688f5dcd"
+  revision = "a03db407e40d3b66ea29984263bbc8bf4d2f04c4"
 
 [[projects]]
   name = "github.com/roasbeef/btcutil"
@@ -231,7 +231,7 @@
     "walletdb/bdb",
     "wtxmgr"
   ]
-  revision = "257011e9f113aeea4720f03f732a19753a4599e1"
+  revision = "41f0e0145c5a4d1b90105dcccf0cbe5d22372eed"
 
 [[projects]]
   branch = "master"
@@ -311,7 +311,7 @@
     "unix",
     "windows"
   ]
-  revision = "3b87a42e500a6dc65dae1a55d0b641295971163e"
+  revision = "79b0c6888797020a994db17c8510466c72fe75d9"
 
 [[projects]]
   name = "golang.org/x/text"
@@ -386,6 +386,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "f8505ac579c1268948f592b682d6ff9f03d7c2d94c43328e9fd7b06666e938cb"
+  inputs-digest = "fafc88ec2e7cc2e2f2e28a83002abcbefdc129f7801151296dbdf965a3b9803e"
   solver-name = "gps-cdcl"
   solver-version = 1
