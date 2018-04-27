@@ -520,10 +520,18 @@ func (r *rpcServer) NewWitnessAddress(ctx context.Context,
 	return &lnrpc.NewAddressResponse{Address: addr.String()}, nil
 }
 
+var (
+	// signedMsgPrefix is a special prefix that we'll prepend to any
+	// messages we sign/verify. We do this to ensure that we don't
+	// accidentally sign a sighash, or other sensitive material. By
+	// prepending this fragment, we mind message signing to our particular
+	// context.
+	signedMsgPrefix = []byte("Lightning Signed Message:")
+)
+
 // SignMessage signs a message with the resident node's private key. The
-// returned signature string is zbase32 encoded and pubkey recoverable,
-// meaning that only the message digest and signature are needed for
-// verification.
+// returned signature string is zbase32 encoded and pubkey recoverable, meaning
+// that only the message digest and signature are needed for verification.
 func (r *rpcServer) SignMessage(ctx context.Context,
 	in *lnrpc.SignMessageRequest) (*lnrpc.SignMessageResponse, error) {
 
@@ -531,6 +539,7 @@ func (r *rpcServer) SignMessage(ctx context.Context,
 		return nil, fmt.Errorf("need a message to sign")
 	}
 
+	in.Msg = append(signedMsgPrefix, in.Msg...)
 	sigBytes, err := r.server.nodeSigner.SignCompact(in.Msg)
 	if err != nil {
 		return nil, err
@@ -540,9 +549,9 @@ func (r *rpcServer) SignMessage(ctx context.Context,
 	return &lnrpc.SignMessageResponse{Signature: sig}, nil
 }
 
-// VerifyMessage verifies a signature over a msg. The signature must be
-// zbase32 encoded and signed by an active node in the resident node's
-// channel database. In addition to returning the validity of the signature,
+// VerifyMessage verifies a signature over a msg. The signature must be zbase32
+// encoded and signed by an active node in the resident node's channel
+// database. In addition to returning the validity of the signature,
 // VerifyMessage also returns the recovered pubkey from the signature.
 func (r *rpcServer) VerifyMessage(ctx context.Context,
 	in *lnrpc.VerifyMessageRequest) (*lnrpc.VerifyMessageResponse, error) {
@@ -558,6 +567,7 @@ func (r *rpcServer) VerifyMessage(ctx context.Context,
 	}
 
 	// The signature is over the double-sha256 hash of the message.
+	in.Msg = append(signedMsgPrefix, in.Msg...)
 	digest := chainhash.DoubleHashB(in.Msg)
 
 	// RecoverCompact both recovers the pubkey and validates the signature.
@@ -572,6 +582,7 @@ func (r *rpcServer) VerifyMessage(ctx context.Context,
 
 	// Query the channel graph to ensure a node in the network with active
 	// channels signed the message.
+	//
 	// TODO(phlip9): Require valid nodes to have capital in active channels.
 	graph := r.server.chanDB.ChannelGraph()
 	_, active, err := graph.HasLightningNode(pub)
@@ -1343,18 +1354,24 @@ func (r *rpcServer) WalletBalance(ctx context.Context,
 func (r *rpcServer) ChannelBalance(ctx context.Context,
 	in *lnrpc.ChannelBalanceRequest) (*lnrpc.ChannelBalanceResponse, error) {
 
-	channels, err := r.server.chanDB.FetchAllChannels()
+	openChannels, err := r.server.chanDB.FetchAllOpenChannels()
 	if err != nil {
 		return nil, err
 	}
 
-	var pendingOpenBalance, balance btcutil.Amount
-	for _, channel := range channels {
-		if channel.IsPending {
-			pendingOpenBalance += channel.LocalCommitment.LocalBalance.ToSatoshis()
-		} else {
-			balance += channel.LocalCommitment.LocalBalance.ToSatoshis()
-		}
+	var balance btcutil.Amount
+	for _, channel := range openChannels {
+		balance += channel.LocalCommitment.LocalBalance.ToSatoshis()
+	}
+
+	pendingChannels, err := r.server.chanDB.FetchPendingChannels()
+	if err != nil {
+		return nil, err
+	}
+
+	var pendingOpenBalance btcutil.Amount
+	for _, channel := range pendingChannels {
+		pendingOpenBalance += channel.LocalCommitment.LocalBalance.ToSatoshis()
 	}
 
 	return &lnrpc.ChannelBalanceResponse{
@@ -1457,7 +1474,8 @@ func (r *rpcServer) PendingChannels(ctx context.Context,
 
 		// If the channel was force closed, then we'll need to query
 		// the utxoNursery for additional information.
-		case channeldb.ForceClose:
+		// TODO(halseth): distinguish remote and local case?
+		case channeldb.LocalForceClose, channeldb.RemoteForceClose:
 			forceClose := &lnrpc.PendingChannelsResponse_ForceClosedChannel{
 				Channel:     channel,
 				ClosingTxid: closeTXID,
@@ -1522,6 +1540,39 @@ func (r *rpcServer) PendingChannels(ctx context.Context,
 		}
 	}
 
+	// We'll also fetch all channels that are open, but have had their
+	// commitment broadcasted, meaning they are waiting for the closing
+	// transaction to confirm.
+	waitingCloseChans, err := r.server.chanDB.FetchWaitingCloseChannels()
+	if err != nil {
+		rpcsLog.Errorf("unable to fetch channels waiting close: %v",
+			err)
+		return nil, err
+	}
+
+	for _, waitingClose := range waitingCloseChans {
+		pub := waitingClose.IdentityPub.SerializeCompressed()
+		chanPoint := waitingClose.FundingOutpoint
+		channel := &lnrpc.PendingChannelsResponse_PendingChannel{
+			RemoteNodePub: hex.EncodeToString(pub),
+			ChannelPoint:  chanPoint.String(),
+			Capacity:      int64(waitingClose.Capacity),
+			LocalBalance:  int64(waitingClose.LocalCommitment.LocalBalance.ToSatoshis()),
+		}
+
+		// A close tx has been broadcasted, all our balance will be in
+		// limbo until it confirms.
+		resp.WaitingCloseChannels = append(
+			resp.WaitingCloseChannels,
+			&lnrpc.PendingChannelsResponse_WaitingCloseChannel{
+				Channel:      channel,
+				LimboBalance: channel.LocalBalance,
+			},
+		)
+
+		resp.TotalLimboBalance += channel.LocalBalance
+	}
+
 	return resp, nil
 }
 
@@ -1544,7 +1595,7 @@ func (r *rpcServer) ListChannels(ctx context.Context,
 
 	graph := r.server.chanDB.ChannelGraph()
 
-	dbChannels, err := r.server.chanDB.FetchAllChannels()
+	dbChannels, err := r.server.chanDB.FetchAllOpenChannels()
 	if err != nil {
 		return nil, err
 	}
@@ -1553,10 +1604,6 @@ func (r *rpcServer) ListChannels(ctx context.Context,
 		len(dbChannels))
 
 	for _, dbChannel := range dbChannels {
-		if dbChannel.IsPending {
-			continue
-		}
-
 		nodePub := dbChannel.IdentityPub
 		nodeID := hex.EncodeToString(nodePub.SerializeCompressed())
 		chanPoint := dbChannel.FundingOutpoint

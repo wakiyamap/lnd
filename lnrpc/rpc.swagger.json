@@ -893,6 +893,20 @@
         }
       }
     },
+    "PendingChannelsResponseWaitingCloseChannel": {
+      "type": "object",
+      "properties": {
+        "channel": {
+          "$ref": "#/definitions/PendingChannelsResponsePendingChannel",
+          "title": "/ The pending channel waiting for closing tx to confirm"
+        },
+        "limbo_balance": {
+          "type": "string",
+          "format": "int64",
+          "title": "/ The balance in satoshis encumbered in this channel"
+        }
+      }
+    },
     "lnrpcAddInvoiceResponse": {
       "type": "object",
       "properties": {
@@ -1555,6 +1569,11 @@
           "type": "string",
           "format": "byte",
           "description": "*\naezeed_passphrase is an optional user provided passphrase that will be used\nto encrypt the generated aezeed cipher seed."
+        },
+        "recovery_window": {
+          "type": "integer",
+          "format": "int32",
+          "description": "*\nrecovery_window is an optional argument specifying the address lookahead\nwhen restoring a wallet seed. The recovery window applies to each\ninvdividual branch of the BIP44 derivation paths. Supplying a recovery\nwindow of zero indicates that no addresses should be recovered, such after\nthe first initialization of the wallet."
         }
       }
     },
@@ -2035,6 +2054,13 @@
             "$ref": "#/definitions/PendingChannelsResponseForceClosedChannel"
           },
           "title": "/ Channels pending force closing"
+        },
+        "waiting_close_channels": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PendingChannelsResponseWaitingCloseChannel"
+          },
+          "title": "/ Channels waiting for closing tx to confirm"
         }
       }
     },
@@ -2369,6 +2395,11 @@
           "type": "string",
           "format": "byte",
           "description": "*\nwallet_password should be the current valid passphrase for the daemon. This\nwill be required to decrypt on-disk material that the daemon requires to\nfunction properly."
+        },
+        "recovery_window": {
+          "type": "integer",
+          "format": "int32",
+          "description": "*\nrecovery_window is an optional argument specifying the address lookahead\nwhen restoring a wallet seed. The recovery window applies to each\ninvdividual branch of the BIP44 derivation paths. Supplying a recovery\nwindow of zero indicates that no addresses should be recovered, such after\nthe first initialization of the wallet."
         }
       }
     },
