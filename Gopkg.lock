@@ -13,15 +13,6 @@
   revision = "e06297f34865a50b8e473105e52cb64ad1b55da8"
 
 [[projects]]
-  name = "github.com/BitfuryLightning/tools"
-  packages = [
-    "rt",
-    "rt/graph"
-  ]
-  revision = "ac001bcd060fc9d698ec79b45078606df5b2cadb"
-  version = "v0.0.3"
-
-[[projects]]
   name = "github.com/Yawning/aez"
   packages = ["."]
   revision = "4dad034d9db2caec23fb8f69b9160ae16f8d46a3"
@@ -66,12 +57,6 @@
   name = "github.com/bitgoin/lyra2rev2"
   packages = ["sha3"]
   revision = "bae9ad2043bb55facb14c4918e909f88a7d3ed84"
-
-[[projects]]
-  name = "github.com/boltdb/bolt"
-  packages = ["."]
-  revision = "2f1ce7a837dcb8da3ec595b1dac9d0632f0f99e8"
-  version = "v1.3.1"
 
 [[projects]]
   name = "github.com/btcsuite/btclog"
@@ -188,16 +173,18 @@
   revision = "36d9a509ff4ea1e916a73c6f1c2b784c1faf11ed"
 
 [[projects]]
+  branch = "master"
   name = "github.com/lightningnetwork/lnd"
   packages = [
     "chainntnfs",
     "channeldb",
-    "elkrem",
+    "htlcswitch/hodl",
+    "keychain",
     "lnwallet",
-    "lnwire"
+    "lnwire",
+    "shachain"
   ]
-  revision = "9537539cfc67e28ba9933c31ee01cf7f2aa6165f"
-  version = "v0.0.2"
+  revision = "9017d18f14d9cb07256dfa9c2927cb6d6431dbeb"
 
 [[projects]]
   name = "github.com/miekg/dns"
@@ -413,6 +400,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "87170fbb86704628deeeff547923ff0d01f072f083a2bd60410e139099b329ab"
+  inputs-digest = "7dc335976bf22c9c299f74897a4731248245c74a6cd5cae722049eb24aabca8a"
   solver-name = "gps-cdcl"
   solver-version = 1

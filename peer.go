@@ -403,7 +403,7 @@ func (p *peer) loadActiveChannels(chans []*channeldb.OpenChannel) error {
 		// necessary to properly route multi-hop payments, and forward
 		// new payments triggered by RPC clients.
 		chainEvents, err := p.server.chainArb.SubscribeChannelEvents(
-			*chanPoint, false,
+			*chanPoint,
 		)
 		if err != nil {
 			lnChan.Stop()
@@ -417,7 +417,7 @@ func (p *peer) loadActiveChannels(chans []*channeldb.OpenChannel) error {
 				p.server.chanRouter, p.PubKey(),
 			),
 			DebugHTLC:      cfg.DebugHTLC,
-			HodlHTLC:       cfg.HodlHTLC,
+			HodlMask:       cfg.Hodl.Mask(),
 			Registry:       p.server.invoices,
 			Switch:         p.server.htlcSwitch,
 			Circuits:       p.server.htlcSwitch.CircuitModifier(),
@@ -637,6 +637,7 @@ func (ms *msgStream) msgConsumer() {
 		select {
 		case ms.producerSema <- struct{}{}:
 		case <-ms.quit:
+			atomic.StoreInt32(&ms.streamShutdown, 1)
 			return
 		}
 	}
@@ -1379,7 +1380,7 @@ out:
 				continue
 			}
 			chainEvents, err := p.server.chainArb.SubscribeChannelEvents(
-				*chanPoint, false,
+				*chanPoint,
 			)
 			if err != nil {
 				peerLog.Errorf("unable to subscribe to chain "+
@@ -1394,7 +1395,7 @@ out:
 					p.server.chanRouter, p.PubKey(),
 				),
 				DebugHTLC:      cfg.DebugHTLC,
-				HodlHTLC:       cfg.HodlHTLC,
+				HodlMask:       cfg.Hodl.Mask(),
 				Registry:       p.server.invoices,
 				Switch:         p.server.htlcSwitch,
 				Circuits:       p.server.htlcSwitch.CircuitModifier(),
