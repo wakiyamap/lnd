@@ -173,20 +173,6 @@
   revision = "36d9a509ff4ea1e916a73c6f1c2b784c1faf11ed"
 
 [[projects]]
-  branch = "master"
-  name = "github.com/lightningnetwork/lnd"
-  packages = [
-    "chainntnfs",
-    "channeldb",
-    "htlcswitch/hodl",
-    "keychain",
-    "lnwallet",
-    "lnwire",
-    "shachain"
-  ]
-  revision = "9017d18f14d9cb07256dfa9c2927cb6d6431dbeb"
-
-[[projects]]
   name = "github.com/miekg/dns"
   packages = [
     ".",
@@ -400,6 +386,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "7dc335976bf22c9c299f74897a4731248245c74a6cd5cae722049eb24aabca8a"
+  inputs-digest = "4b93c62a50234bbe5eb126f1b818142512fea0b413816064bb06d0f8f0810df2"
   solver-name = "gps-cdcl"
   solver-version = 1
