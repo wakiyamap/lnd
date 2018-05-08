@@ -51,6 +51,10 @@
   revision = "5f654d5faab99ee2b3488fabba98e5f7a5257ee3"
 
 [[constraint]]
+  name = "github.com/wakiyamap/monad"
+  revision = "199f7d9fca56f246ad3087e616e26e5b7f5d1f90"
+
+[[constraint]]
   name = "github.com/miekg/dns"
   revision = "79bfde677fa81ff8d27c4330c35bda075d360641"
 

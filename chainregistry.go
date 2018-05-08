@@ -44,6 +44,13 @@ const (
 	defaultLitecoinTimeLockDelta = 576
 	defaultLitecoinStaticFeeRate = lnwallet.SatPerVByte(200)
 	defaultLitecoinDustLimit     = btcutil.Amount(54600)
+
+	defaultMonacoinMinHTLCMSat   = lnwire.MilliSatoshi(1000)
+	defaultMonacoinBaseFeeMSat   = lnwire.MilliSatoshi(1000)
+	defaultMonacoinFeeRate       = lnwire.MilliSatoshi(1)
+	defaultMonacoinTimeLockDelta = 960
+	defaultMonacoinStaticFeeRate = lnwallet.SatPerVByte(200)
+	defaultMonacoinDustLimit     = btcutil.Amount(54600)
 )
 
 // defaultBtcChannelConstraints is the default set of channel constraints that are
@@ -62,6 +69,13 @@ var defaultLtcChannelConstraints = channeldb.ChannelConstraints{
 	MaxAcceptedHtlcs: lnwallet.MaxHTLCNumber / 2,
 }
 
+// defaultMonaChannelConstraints is the default set of channel constraints that are
+// meant to be used when initially funding a Monacoin channel.
+var defaultMonaChannelConstraints = channeldb.ChannelConstraints{
+	DustLimit:        defaultMonacoinDustLimit,
+	MaxAcceptedHtlcs: lnwallet.MaxHTLCNumber / 2,
+}
+
 // chainCode is an enum-like structure for keeping track of the chains
 // currently supported within lnd.
 type chainCode uint32
@@ -72,6 +86,9 @@ const (
 
 	// litecoinChain is Litecoin's testnet chain.
 	litecoinChain
+
+	// monacoinChain is Monacoin's testnet chain.
+	monacoinChain
 )
 
 // String returns a string representation of the target chainCode.
@@ -81,6 +98,8 @@ func (c chainCode) String() string {
 		return "bitcoin"
 	case litecoinChain:
 		return "litecoin"
+	case monacoinChain:
+		return "monacoin"
 	default:
 		return "kekcoin"
 	}
@@ -120,6 +139,8 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 	homeChainConfig := cfg.Bitcoin
 	if registeredChains.PrimaryChain() == litecoinChain {
 		homeChainConfig = cfg.Litecoin
+	} else if registeredChains.PrimaryChain() == monacoinChain {
+		homeChainConfig = cfg.Monacoin
 	}
 	ltndLog.Infof("Primary chain is set to: %v",
 		registeredChains.PrimaryChain())
@@ -146,6 +167,16 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 		}
 		cc.feeEstimator = lnwallet.StaticFeeEstimator{
 			FeeRate: defaultLitecoinStaticFeeRate,
+		}
+	case monacoinChain:
+		cc.routingPolicy = htlcswitch.ForwardingPolicy{
+			MinHTLC:       cfg.Monacoin.MinHTLC,
+			BaseFee:       cfg.Monacoin.BaseFee,
+			FeeRate:       cfg.Monacoin.FeeRate,
+			TimeLockDelta: cfg.Monacoin.TimeLockDelta,
+		}
+		cc.feeEstimator = lnwallet.StaticFeeEstimator{
+			FeeRate: defaultMonacoinStaticFeeRate,
 		}
 	default:
 		return nil, nil, fmt.Errorf("Default routing policy for "+
@@ -253,13 +284,15 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 			svc.Stop()
 			nodeDatabase.Close()
 		}
-	case "bitcoind", "litecoind":
+	case "bitcoind", "litecoind", "monacoind":
 		var bitcoindMode *bitcoindConfig
 		switch {
 		case cfg.Bitcoin.Active:
 			bitcoindMode = cfg.BitcoindMode
 		case cfg.Litecoin.Active:
 			bitcoindMode = cfg.LitecoindMode
+		case cfg.Monacoin.Active:
+			bitcoindMode = cfg.MonacoindMode
 		}
 		// Otherwise, we'll be speaking directly via RPC and ZMQ to a
 		// bitcoind node. If the specified host for the btcd/ltcd RPC
@@ -368,9 +401,25 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 			}
 			if err := cc.feeEstimator.Start(); err != nil {
 				return nil, nil, err
+		} else if cfg.Monacoin.Active {
+			ltndLog.Infof("Initializing monacoind backed fee estimator")
+
+			// Finally, we'll re-initialize the fee estimator, as
+			// if we're using monacoind as a backend, then we can
+			// use live fee estimates, rather than a statically
+			// coded value.
+			fallBackFeeRate := lnwallet.SatPerVByte(25)
+			cc.feeEstimator, err = lnwallet.NewBitcoindFeeEstimator(
+				*rpcConfig, fallBackFeeRate,
+			)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := cc.feeEstimator.Start(); err != nil {
+				return nil, nil, err
 			}
 		}
-	case "btcd", "ltcd":
+	case "btcd", "ltcd", "monad":
 		// Otherwise, we'll be speaking directly via RPC to a node.
 		//
 		// So first we'll load btcd/ltcd's TLS cert for the RPC
@@ -383,6 +432,8 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 			btcdMode = cfg.BtcdMode
 		case cfg.Litecoin.Active:
 			btcdMode = cfg.LtcdMode
+		case cfg.Monacoin.Active:
+			btcdMode = cfg.MonadMode
 		}
 		var rpcCert []byte
 		if btcdMode.RawRPCCert != "" {
@@ -453,8 +504,8 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 
 		// If we're not in simnet or regtest mode, then we'll attempt
 		// to use a proper fee estimator for testnet.
-		if !cfg.Bitcoin.SimNet && !cfg.Litecoin.SimNet &&
-			!cfg.Bitcoin.RegTest && !cfg.Litecoin.RegTest {
+		if !cfg.Bitcoin.SimNet && !cfg.Litecoin.SimNet && !cfg.Monacoin.SimNet &&
+			!cfg.Bitcoin.RegTest && !cfg.Litecoin.RegTest && !cfg.Monacoin.RegTest {
 
 			ltndLog.Infof("Initializing btcd backed fee estimator")
 
@@ -492,6 +543,8 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 	channelConstraints := defaultBtcChannelConstraints
 	if registeredChains.PrimaryChain() == litecoinChain {
 		channelConstraints = defaultLtcChannelConstraints
+	} else if registeredChains.PrimaryChain() == monacoinChain {
+		channelConstraints = defaultMonaChannelConstraints
 	}
 
 	keyRing := keychain.NewBtcWalletKeyRing(
@@ -563,14 +616,33 @@ var (
 		0x59, 0x40, 0xfd, 0x1f, 0xe3, 0x65, 0xa7, 0x12,
 	})
 
+	// monacoinTestnetGenesis is the genesis hash of Monacoin's testnet4
+	// chain.
+	monacoinTestnetGenesis = chainhash.Hash([chainhash.HashSize]byte{
+		0xb2, 0xe0, 0x61, 0x10, 0x32, 0x9c, 0x44, 0x8f,
+		0x15, 0x78, 0xe4, 0x8a, 0x25, 0xa8, 0x8b, 0x63,
+		0x9d, 0xcf, 0xaa, 0xa6, 0xa6, 0xb2, 0x97, 0xd0,
+		0xc6, 0xe0, 0x3b, 0xba, 0xce, 0x06, 0xb1, 0xa2,
+	})
+
+	// monacoinMainnetGenesis is the genesis hash of Monacoin's main chain.
+	monacoinMainnetGenesis = chainhash.Hash([chainhash.HashSize]byte{
+		0xb6, 0x8b, 0x8c, 0x41, 0x0d, 0x2e, 0xa4, 0xaf,
+		0xd7, 0x4f, 0xb5, 0x6e, 0x37, 0x0b, 0xfc, 0x1b,
+		0xed, 0xf9, 0x29, 0xe1, 0x45, 0x38, 0x96, 0xc9,
+		0xe7, 0x9d, 0xd1, 0x16, 0x01, 0x1c, 0x9f, 0xff,
+	})
+
 	// chainMap is a simple index that maps a chain's genesis hash to the
 	// chainCode enum for that chain.
 	chainMap = map[chainhash.Hash]chainCode{
 		bitcoinTestnetGenesis:  bitcoinChain,
 		litecoinTestnetGenesis: litecoinChain,
+		monacoinTestnetGenesis: monacoinChain,
 
 		bitcoinMainnetGenesis:  bitcoinChain,
 		litecoinMainnetGenesis: litecoinChain,
+		monacoinMainnetGenesis: monacoinChain,
 	}
 
 	// chainDNSSeeds is a map of a chain's hash to the set of DNS seeds
@@ -604,6 +676,13 @@ var (
 			{
 				"ltc.nodes.lightning.directory",
 				"soa.nodes.lightning.directory",
+			},
+		},
+
+		monacoinMainnetGenesis: {
+			{
+				"lnd.nodes.directory",
+				"soa.lnd.nodes.directory",
 			},
 		},
 	}

@@ -79,8 +79,12 @@ var (
 	defaultLtcdDir         = btcutil.AppDataDir("ltcd", false)
 	defaultLtcdRPCCertFile = filepath.Join(defaultLtcdDir, "rpc.cert")
 
+	defaultMonadDir         = btcutil.AppDataDir("monad", false)
+	defaultMonadRPCCertFile = filepath.Join(defaultMonadDir, "rpc.cert")
+
 	defaultBitcoindDir  = btcutil.AppDataDir("bitcoin", false)
 	defaultLitecoindDir = btcutil.AppDataDir("litecoin", false)
+	defaultMonacoindDir = btcutil.AppDataDir("monacoin", false)
 )
 
 type chainConfig struct {
@@ -188,6 +192,10 @@ type config struct {
 	LtcdMode      *btcdConfig     `group:"ltcd" namespace:"ltcd"`
 	LitecoindMode *bitcoindConfig `group:"litecoind" namespace:"litecoind"`
 
+	Monacoin      *chainConfig    `group:"Monacoin" namespace:"monacoin"`
+	MonadMode      *btcdConfig     `group:"monad" namespace:"monad"`
+	MonacoindMode *bitcoindConfig `group:"monacoind" namespace:"monacoind"`
+
 	Autopilot *autoPilotConfig `group:"autopilot" namespace:"autopilot"`
 
 	Tor *torConfig `group:"Tor" namespace:"tor"`
@@ -259,6 +267,22 @@ func loadConfig() (*config, error) {
 		},
 		LitecoindMode: &bitcoindConfig{
 			Dir:     defaultLitecoindDir,
+			RPCHost: defaultRPCHost,
+		},
+		Monacoin: &chainConfig{
+			MinHTLC:       defaultMonacoinMinHTLCMSat,
+			BaseFee:       defaultMonacoinBaseFeeMSat,
+			FeeRate:       defaultMonacoinFeeRate,
+			TimeLockDelta: defaultMonacoinTimeLockDelta,
+			Node:          "monad",
+		},
+		MonadMode: &btcdConfig{
+			Dir:     defaultMonadDir,
+			RPCHost: defaultRPCHost,
+			RPCCert: defaultMonadRPCCertFile,
+		},
+		MonacoindMode: &bitcoindConfig{
+			Dir:     defaultMonacoindDir,
 			RPCHost: defaultRPCHost,
 		},
 		MaxPendingChannels: defaultMaxPendingChannels,
@@ -350,8 +374,10 @@ func loadConfig() (*config, error) {
 	cfg.LogDir = cleanAndExpandPath(cfg.LogDir)
 	cfg.BtcdMode.Dir = cleanAndExpandPath(cfg.BtcdMode.Dir)
 	cfg.LtcdMode.Dir = cleanAndExpandPath(cfg.LtcdMode.Dir)
+	cfg.MonadMode.Dir = cleanAndExpandPath(cfg.MonadMode.Dir)
 	cfg.BitcoindMode.Dir = cleanAndExpandPath(cfg.BitcoindMode.Dir)
 	cfg.LitecoindMode.Dir = cleanAndExpandPath(cfg.LitecoindMode.Dir)
+	cfg.MonacoindMode.Dir = cleanAndExpandPath(cfg.MonacoindMode.Dir)
 
 	// Ensure that the user didn't attempt to specify negative values for
 	// any of the autopilot params.
@@ -437,16 +463,102 @@ func loadConfig() (*config, error) {
 
 	switch {
 	// At this moment, multiple active chains are not supported.
-	case cfg.Litecoin.Active && cfg.Bitcoin.Active:
+	case cfg.Litecoin.Active && cfg.Bitcoin.Active || cfg.Monacoin.Active && cfg.Bitcoin.Active || cfg.Litecoin.Active && cfg.Monacoin.Active:
 		str := "%s: Currently both Bitcoin and Litecoin cannot be " +
 			"active together"
 		return nil, fmt.Errorf(str, funcName)
 
 	// Either Bitcoin must be active, or Litecoin must be active.
 	// Otherwise, we don't know which chain we're on.
-	case !cfg.Bitcoin.Active && !cfg.Litecoin.Active:
+	case !cfg.Bitcoin.Active && !cfg.Litecoin.Active && !cfg.Monacoin.Active:
 		return nil, fmt.Errorf("%s: either bitcoin.active or "+
 			"litecoin.active must be set to 1 (true)", funcName)
+
+	case cfg.Monacoin.Active:
+		if cfg.Monacoin.SimNet {
+			str := "%s: simnet mode for monacoin not currently supported"
+			return nil, fmt.Errorf(str, funcName)
+		}
+		if cfg.Monacoin.RegTest {
+			str := "%s: regnet mode for monacoin not currently supported"
+			return nil, fmt.Errorf(str, funcName)
+		}
+
+		if cfg.Monacoin.TimeLockDelta < minTimeLockDelta {
+			return nil, fmt.Errorf("timelockdelta must be at least %v",
+				minTimeLockDelta)
+		}
+
+		// Multiple networks can't be selected simultaneously.  Count
+		// number of network flags passed; assign active network params
+		// while we're at it.
+		numNets := 0
+		var monaParams monacoinNetParams
+		if cfg.Monacoin.MainNet {
+			numNets++
+			monaParams = monacoinMainNetParams
+		}
+		if cfg.Monacoin.TestNet3 {
+			numNets++
+			monaParams = monacoinTestNetParams
+		}
+		if numNets > 1 {
+			str := "%s: The mainnet, testnet, and simnet params " +
+				"can't be used together -- choose one of the " +
+				"three"
+			err := fmt.Errorf(str, funcName)
+			return nil, err
+		}
+
+		// The target network must be provided, otherwise, we won't
+		// know how to initialize the daemon.
+		if numNets == 0 {
+			str := "%s: either --monacoin.mainnet, or " +
+				"monacoin.testnet must be specified"
+			err := fmt.Errorf(str, funcName)
+			return nil, err
+		}
+
+		// The monacoin chain is the current active chain. However
+		// throughout the codebase we required chaincfg.Params. So as a
+		// temporary hack, we'll mutate the default net params for
+		// bitcoin with the monacoin specific information.
+		applyMonacoinParams(&activeNetParams, &monaParams)
+
+		switch cfg.Monacoin.Node {
+		case "monad":
+			err := parseRPCParams(cfg.Monacoin, cfg.MonadMode,
+				monacoinChain, funcName)
+			if err != nil {
+				err := fmt.Errorf("unable to load RPC "+
+					"credentials for monad: %v", err)
+				return nil, err
+			}
+		case "monacoind":
+			if cfg.Monacoin.SimNet {
+				return nil, fmt.Errorf("%s: monacoind does not "+
+					"support simnet", funcName)
+			}
+			err := parseRPCParams(cfg.Monacoin, cfg.MonacoindMode,
+				monacoinChain, funcName)
+			if err != nil {
+				err := fmt.Errorf("unable to load RPC "+
+					"credentials for monacoind: %v", err)
+				return nil, err
+			}
+		default:
+			str := "%s: only monad and monacoind mode supported for " +
+				"monacoin at this time"
+			return nil, fmt.Errorf(str, funcName)
+		}
+
+		cfg.Monacoin.ChainDir = filepath.Join(cfg.DataDir,
+			defaultChainSubDirname,
+			monacoinChain.String())
+
+		// Finally we'll register the monacoin chain as our current
+		// primary chain.
+		registeredChains.RegisterPrimaryChain(monacoinChain)
 
 	case cfg.Litecoin.Active:
 		if cfg.Litecoin.SimNet {
@@ -879,6 +991,8 @@ func parseRPCParams(cConfig *chainConfig, nodeConfig interface{}, net chainCode,
 			daemonName = "btcd"
 		case litecoinChain:
 			daemonName = "ltcd"
+		case monacoinChain:
+			daemonName = "monad"
 		}
 
 		// If only ONE of RPCUser or RPCPass is set, we assume the
@@ -895,6 +1009,9 @@ func parseRPCParams(cConfig *chainConfig, nodeConfig interface{}, net chainCode,
 		case litecoinChain:
 			confDir = conf.Dir
 			confFile = "ltcd"
+		case monacoinChain:
+			confDir = conf.Dir
+			confFile = "monad"
 		}
 	case *bitcoindConfig:
 		// If all of RPCUser, RPCPass, and ZMQPath are set, we assume
@@ -909,6 +1026,8 @@ func parseRPCParams(cConfig *chainConfig, nodeConfig interface{}, net chainCode,
 			daemonName = "bitcoind"
 		case litecoinChain:
 			daemonName = "litecoind"
+		case monacoinChain:
+			daemonName = "monacoind"
 		}
 		// If only one or two of the parameters are set, we assume the
 		// user did that unintentionally.
@@ -925,6 +1044,9 @@ func parseRPCParams(cConfig *chainConfig, nodeConfig interface{}, net chainCode,
 		case litecoinChain:
 			confDir = conf.Dir
 			confFile = "litecoin"
+		case monacoinChain:
+			confDir = conf.Dir
+			confFile = "monacoin"
 		}
 	}
 
@@ -941,7 +1063,7 @@ func parseRPCParams(cConfig *chainConfig, nodeConfig interface{}, net chainCode,
 
 	confFile = filepath.Join(confDir, fmt.Sprintf("%v.conf", confFile))
 	switch cConfig.Node {
-	case "btcd", "ltcd":
+	case "btcd", "ltcd", "monad":
 		nConf := nodeConfig.(*btcdConfig)
 		rpcUser, rpcPass, err := extractBtcdRPCParams(confFile)
 		if err != nil {
@@ -950,7 +1072,7 @@ func parseRPCParams(cConfig *chainConfig, nodeConfig interface{}, net chainCode,
 				err)
 		}
 		nConf.RPCUser, nConf.RPCPass = rpcUser, rpcPass
-	case "bitcoind", "litecoind":
+	case "bitcoind", "litecoind", "monacoind":
 		nConf := nodeConfig.(*bitcoindConfig)
 		rpcUser, rpcPass, zmqPath, err := extractBitcoindRPCParams(confFile)
 		if err != nil {

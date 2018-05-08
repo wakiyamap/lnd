@@ -2246,6 +2246,8 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 		defaultDelta := cfg.Bitcoin.TimeLockDelta
 		if registeredChains.PrimaryChain() == litecoinChain {
 			defaultDelta = cfg.Litecoin.TimeLockDelta
+		} else if registeredChains.PrimaryChain() == monacoinChain {
+			defaultDelta = cfg.Monacoin.TimeLockDelta
 		}
 		options = append(options, zpay32.CLTVExpiry(uint64(defaultDelta)))
 	}

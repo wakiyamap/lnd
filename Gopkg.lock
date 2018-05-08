@@ -24,13 +24,22 @@
     ".",
     "chacha"
   ]
-  revision = "c8d29375923a8e1d2a0f0dc0fc1d8a0aba5b97ba"
+  revision = "e2538746bfea853aaa589feb8ec46bd46ee78f86"
 
 [[projects]]
   branch = "master"
   name = "github.com/aead/siphash"
   packages = ["."]
   revision = "e404fcfc888570cadd1610538e2dbc89f66af814"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/aead/skein"
+  packages = [
+    ".",
+    "threefish"
+  ]
+  revision = "9365ae6e95d294dc113a0b308852f97c916db233"
 
 [[projects]]
   name = "github.com/awalterschulze/gographviz"
@@ -42,6 +51,12 @@
     "token"
   ]
   revision = "761fd5fbb34e4c2c138c280395b65b48e4ff5a53"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/bitgoin/lyra2rev2"
+  packages = ["sha3"]
+  revision = "bae9ad2043bb55facb14c4918e909f88a7d3ed84"
 
 [[projects]]
   name = "github.com/btcsuite/btclog"
@@ -91,6 +106,12 @@
   revision = "8991bc29aa16c548c550c7ff78260e27b9ab7c73"
 
 [[projects]]
+  branch = "master"
+  name = "github.com/dchest/blake256"
+  packages = ["."]
+  revision = "dee3fe6eb0e98dc774a94fc231f85baf7c29d360"
+
+[[projects]]
   name = "github.com/go-errors/errors"
   packages = ["."]
   revision = "a6af135bd4e28680facf08a3d206b454abc877a4"
@@ -129,7 +150,7 @@
   branch = "master"
   name = "github.com/juju/loggo"
   packages = ["."]
-  revision = "8232ab8918d91c72af1a9fb94d3edbe31d88b790"
+  revision = "7f1609ff1f3fcf3519ed62ccaaa9e609ea287838"
 
 [[projects]]
   name = "github.com/kkdai/bstream"
@@ -155,6 +176,39 @@
   name = "github.com/lightningnetwork/lightning-onion"
   packages = ["."]
   revision = "c86137582e53fe3ba26681a98f911b546970893e"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/lightningnetwork/lnd"
+  packages = [
+    "aezeed",
+    "autopilot",
+    "brontide",
+    "chainntnfs",
+    "chainntnfs/bitcoindnotify",
+    "chainntnfs/btcdnotify",
+    "chainntnfs/neutrinonotify",
+    "channeldb",
+    "contractcourt",
+    "discovery",
+    "htlcswitch",
+    "htlcswitch/hodl",
+    "keychain",
+    "lnrpc",
+    "lntest",
+    "lnwallet",
+    "lnwallet/btcwallet",
+    "lnwire",
+    "macaroons",
+    "multimutex",
+    "routing",
+    "routing/chainview",
+    "shachain",
+    "torsvc",
+    "walletunlocker",
+    "zpay32"
+  ]
+  revision = "27ca61aedf038e0df7a6f6cd9f7d35bc5e2013d0"
 
 [[projects]]
   name = "github.com/ltcsuite/ltcd"
@@ -244,6 +298,21 @@
   revision = "1efa31f08b9333f1bd4882d61f9d668a70cd902e"
 
 [[projects]]
+  branch = "master"
+  name = "github.com/wakiyamap/lyra2rev2"
+  packages = ["."]
+  revision = "bae9ad2043bb55facb14c4918e909f88a7d3ed84"
+
+[[projects]]
+  name = "github.com/wakiyamap/monad"
+  packages = [
+    "chaincfg",
+    "chaincfg/chainhash",
+    "wire"
+  ]
+  revision = "199f7d9fca56f246ad3087e616e26e5b7f5d1f90"
+
+[[projects]]
   name = "golang.org/x/crypto"
   packages = [
     "blake2b",
@@ -281,10 +350,11 @@
   branch = "master"
   name = "golang.org/x/sys"
   packages = [
+    "cpu",
     "unix",
     "windows"
   ]
-  revision = "c28acc882ebcbfbe8ce9f0f14b9ac26ee138dd51"
+  revision = "7db1c3b1a98089d0071c84f646ff5c96aad43682"
 
 [[projects]]
   name = "golang.org/x/text"
@@ -340,7 +410,7 @@
   branch = "v1"
   name = "gopkg.in/errgo.v1"
   packages = ["."]
-  revision = "442357a80af5c6bf9b6d51ae791a39c3421004f3"
+  revision = "c17903c6b19d5dedb9cfba9fa314c7fae63e554f"
 
 [[projects]]
   name = "gopkg.in/macaroon-bakery.v2"
@@ -359,6 +429,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "7edcc418d8e2f483001838e05dc77e3fe613273418f8ddf7efd5cee6df68c6a8"
+  inputs-digest = "59d6dda6a81736a9ccb5ee2d16217e03efa14a1501757b2173279ccd9d125c19"
   solver-name = "gps-cdcl"
   solver-version = 1

@@ -111,10 +111,10 @@ func lndMain() error {
 
 	var network string
 	switch {
-	case cfg.Bitcoin.TestNet3 || cfg.Litecoin.TestNet3:
+	case cfg.Bitcoin.TestNet3 || cfg.Litecoin.TestNet3 || cfg.Monacoin.TestNet3:
 		network = "testnet"
 
-	case cfg.Bitcoin.MainNet || cfg.Litecoin.MainNet:
+	case cfg.Bitcoin.MainNet || cfg.Litecoin.MainNet || cfg.Monacoin.MainNet:
 		network = "mainnet"
 
 	case cfg.Bitcoin.SimNet:
@@ -294,6 +294,10 @@ func lndMain() error {
 		chainCfg = cfg.Litecoin
 		minRemoteDelay = minLtcRemoteDelay
 		maxRemoteDelay = maxLtcRemoteDelay
+	} else if primaryChain == monacoinChain {
+		chainCfg = cfg.Monacoin
+		minRemoteDelay = minMonaRemoteDelay
+		maxRemoteDelay = maxMonaRemoteDelay
 	}
 
 	// TODO(roasbeef): add rotation
@@ -554,7 +558,7 @@ func lndMain() error {
 	// continue the start up of the remainder of the daemon. This ensures
 	// that we don't accept any possibly invalid state transitions, or
 	// accept channels with spent funds.
-	if !(cfg.Bitcoin.SimNet || cfg.Litecoin.SimNet) {
+	if !(cfg.Bitcoin.SimNet || cfg.Litecoin.SimNet || cfg.Monacoin.SimNet) {
 		_, bestHeight, err := activeChainControl.chainIO.GetBestBlock()
 		if err != nil {
 			return err
@@ -876,6 +880,8 @@ func waitForWalletPassword(
 	chainConfig := cfg.Bitcoin
 	if registeredChains.PrimaryChain() == litecoinChain {
 		chainConfig = cfg.Litecoin
+	} else if registeredChains.PrimaryChain() == monacoinChain {
+		chainConfig = cfg.Monacoin
 	}
 	pwService := walletunlocker.New(macaroonService,
 		chainConfig.ChainDir, activeNetParams.Params)

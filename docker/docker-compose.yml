@@ -62,6 +62,37 @@ services:
             - "ltcd:rpcserver"
         entrypoint: ["./start-ltcctl.sh"]
 
+
+    # mona is an image of monacoin node which used as base image for monad and
+    # monactl. The environment variables default values determined on stage of
+    # container start within starting script.
+    mona:
+      image: monad
+      build:
+        context: monad/
+      volumes:
+            - shared:/rpc
+            - monacoin:/data
+      environment:
+        - RPCUSER
+        - RPCPASS
+        - NETWORK
+
+    monad:
+        extends: mona
+        container_name: monad
+        environment:
+          - DEBUG
+          - MINING_ADDRESS
+        entrypoint: ["./start-monad.sh"]
+
+    monactl:
+        extends: mona
+        container_name: monactl
+        links:
+            - "monad:rpcserver"
+        entrypoint: ["./start-monactl.sh"]
+
     lnd:
         image: lnd
         build:
@@ -76,6 +107,12 @@ services:
         volumes:
             - shared:/rpc
         entrypoint: ["./start-lnd.sh"]
+
+    lnd_mona:
+      extends: lnd
+      container_name: lnd_mona
+      links:
+          - "monad:blockchain"
 
     lnd_ltc:
       extends: lnd

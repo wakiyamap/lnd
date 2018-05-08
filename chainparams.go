@@ -4,6 +4,8 @@ import (
 	"github.com/lightningnetwork/lnd/keychain"
 	litecoinCfg "github.com/ltcsuite/ltcd/chaincfg"
 	litecoinWire "github.com/ltcsuite/ltcd/wire"
+	monacoinCfg "github.com/wakiyamap/monad/chaincfg"
+	monacoinWire "github.com/wakiyamap/monad/wire"
 	"github.com/roasbeef/btcd/chaincfg"
 	bitcoinCfg "github.com/roasbeef/btcd/chaincfg"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
@@ -26,6 +28,14 @@ type bitcoinNetParams struct {
 // corresponding RPC port of a daemon running on the particular network.
 type litecoinNetParams struct {
 	*litecoinCfg.Params
+	rpcPort  string
+	CoinType uint32
+}
+
+// monacoinNetParams couples the p2p parameters of a network with the
+// corresponding RPC port of a daemon running on the particular network.
+type monacoinNetParams struct {
+	*monacoinCfg.Params
 	rpcPort  string
 	CoinType uint32
 }
@@ -68,6 +78,22 @@ var litecoinMainNetParams = litecoinNetParams{
 	Params:   &litecoinCfg.MainNetParams,
 	rpcPort:  "9334",
 	CoinType: keychain.CoinTypeLitecoin,
+}
+
+// monacoinTestNetParams contains parameters specific to the 4th version of the
+// test network.
+var monacoinTestNetParams = monacoinNetParams{
+	Params:   &monacoinCfg.TestNet4Params,
+	rpcPort:  "19400",
+	CoinType: keychain.CoinTypeTestnet,
+}
+
+// monacoinMainNetParams contains the parameters specific to the current
+// Monacoin mainnet.
+var monacoinMainNetParams = monacoinNetParams{
+	Params:   &monacoinCfg.MainNetParams,
+	rpcPort:  "9400",
+	CoinType: keychain.CoinTypeMonacoin,
 }
 
 // regTestNetParams contains parameters specific to a local regtest network.
@@ -116,6 +142,46 @@ func applyLitecoinParams(params *bitcoinNetParams, litecoinParams *litecoinNetPa
 
 	params.rpcPort = litecoinParams.rpcPort
 	params.CoinType = litecoinParams.CoinType
+}
+
+// applyMonacoinParams applies the relevant chain configuration parameters that
+// differ for monacoin to the chain parameters typed for btcsuite derivation.
+// This function is used in place of using something like interface{} to
+// abstract over _which_ chain (or fork) the parameters are for.
+func applyMonacoinParams(params *bitcoinNetParams, monacoinParams *monacoinNetParams) {
+	params.Name = monacoinParams.Name
+	params.Net = bitcoinWire.BitcoinNet(monacoinParams.Net)
+	params.DefaultPort = monacoinParams.DefaultPort
+	params.CoinbaseMaturity = monacoinParams.CoinbaseMaturity
+
+	copy(params.GenesisHash[:], monacoinParams.GenesisHash[:])
+
+	// Address encoding magics
+	params.PubKeyHashAddrID = monacoinParams.PubKeyHashAddrID
+	params.ScriptHashAddrID = monacoinParams.ScriptHashAddrID
+	params.PrivateKeyID = monacoinParams.PrivateKeyID
+	params.WitnessPubKeyHashAddrID = monacoinParams.WitnessPubKeyHashAddrID
+	params.WitnessScriptHashAddrID = monacoinParams.WitnessScriptHashAddrID
+	params.Bech32HRPSegwit = monacoinParams.Bech32HRPSegwit
+
+	copy(params.HDPrivateKeyID[:], monacoinParams.HDPrivateKeyID[:])
+	copy(params.HDPublicKeyID[:], monacoinParams.HDPublicKeyID[:])
+
+	params.HDCoinType = monacoinParams.HDCoinType
+
+	checkPoints := make([]chaincfg.Checkpoint, len(monacoinParams.Checkpoints))
+	for i := 0; i < len(monacoinParams.Checkpoints); i++ {
+		var chainHash chainhash.Hash
+		copy(chainHash[:], monacoinParams.Checkpoints[i].Hash[:])
+
+		checkPoints[i] = chaincfg.Checkpoint{
+			Height: monacoinParams.Checkpoints[i].Height,
+			Hash:   &chainHash,
+		}
+	}
+	params.Checkpoints = checkPoints
+	params.rpcPort = monacoinParams.rpcPort
+	params.CoinType = monacoinParams.CoinType
 }
 
 // isTestnet tests if the given params correspond to a testnet

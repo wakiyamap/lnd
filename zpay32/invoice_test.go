@@ -20,6 +20,7 @@ import (
 	"github.com/roasbeef/btcutil"
 
 	litecoinCfg "github.com/ltcsuite/ltcd/chaincfg"
+	monacoinCfg "github.com/wakiyamap/monad/chaincfg"
 )
 
 var (
@@ -97,6 +98,9 @@ var (
 
 	ltcTestNetParams chaincfg.Params
 	ltcMainNetParams chaincfg.Params
+
+	monaTestNetParams chaincfg.Params
+	monaMainNetParams chaincfg.Params
 )
 
 func init() {
@@ -112,6 +116,16 @@ func init() {
 	ltcMainNetParams = chaincfg.MainNetParams
 	ltcMainNetParams.Net = wire.BitcoinNet(litecoinCfg.MainNetParams.Net)
 	ltcMainNetParams.Bech32HRPSegwit = litecoinCfg.MainNetParams.Bech32HRPSegwit
+
+	// Initialize monacoin testnet and mainnet params by applying key fields
+	// to copies of bitcoin params.
+	// TODO(sangaman): create an interface for chaincfg.params
+	monaTestNetParams = chaincfg.TestNet3Params
+	monaTestNetParams.Net = wire.BitcoinNet(monacoinCfg.TestNet4Params.Net)
+	monaTestNetParams.Bech32HRPSegwit = monacoinCfg.TestNet4Params.Bech32HRPSegwit
+	monaMainNetParams = chaincfg.MainNetParams
+	monaMainNetParams.Net = wire.BitcoinNet(monacoinCfg.MainNetParams.Net)
+	monaMainNetParams.Bech32HRPSegwit = monacoinCfg.MainNetParams.Bech32HRPSegwit
 }
 
 // TestDecodeEncode tests that an encoded invoice gets decoded into the expected
@@ -579,6 +593,37 @@ func TestDecodeEncode(t *testing.T) {
 				}
 			},
 		},
+		{
+			// Decode a monacoin testnet invoice
+			encodedInvoice: "lntmona241pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsnp4q0n326hr8v9zprg8gsvezcch06gfaqqhde2aj730yg0durunfhv66p582zl8c2phnhr3zhyty2e6q8pdchxz28r26w85zzg3ur9m2tmvptdj44k9pa20e523ku04nuec3qf0pw7988w5c35t7mzzd49qnw7cpyn0wse",
+			valid:          true,
+			decodedInvoice: func() *Invoice {
+				return &Invoice{
+					// TODO(sangaman): create an interface for chaincfg.params
+					Net:             &monaTestNetParams,
+					MilliSat:        &testMillisat24BTC,
+					Timestamp:       time.Unix(1496314658, 0),
+					PaymentHash:     &testPaymentHash,
+					DescriptionHash: &testDescriptionHash,
+					Destination:     testPubKey,
+				}
+			},
+		},
+		{
+			// Decode a monacoin mainnet invoice
+			encodedInvoice: "lnmona241pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsnp4q0n326hr8v9zprg8gsvezcch06gfaqqhde2aj730yg0durunfhv66wsqdsfugfgtjqkap44j4k0g6ekhh4h6y7xm2xkjyczlkqxxqmgczj3hnpqj7g0fad5ghxqd3cnmtwng8xcv6z5w63wmcdmg6qsaaegsqm2sv75",
+			valid:          true,
+			decodedInvoice: func() *Invoice {
+				return &Invoice{
+					Net:             &monaMainNetParams,
+					MilliSat:        &testMillisat24BTC,
+					Timestamp:       time.Unix(1496314658, 0),
+					PaymentHash:     &testPaymentHash,
+					DescriptionHash: &testDescriptionHash,
+					Destination:     testPubKey,
+				}
+			},
+		},
 	}
 
 	for i, test := range tests {
@@ -734,6 +779,30 @@ func TestNewInvoice(t *testing.T) {
 			},
 			valid:          true,
 			encodedInvoice: "lnltc241pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsnp4q0n326hr8v9zprg8gsvezcch06gfaqqhde2aj730yg0durunfhv66859t2d55efrxdlgqg9hdqskfstdmyssdw4fjc8qdl522ct885pqk7acn2aczh0jeht0xhuhnkmm3h0qsrxedlwm9x86787zzn4qwwwcpjkl3t2",
+		},
+		{
+			// Create a monacoin testnet invoice
+			newInvoice: func() (*Invoice, error) {
+				return NewInvoice(&monaTestNetParams,
+					testPaymentHash, time.Unix(1496314658, 0),
+					Amount(testMillisat24BTC),
+					DescriptionHash(testDescriptionHash),
+					Destination(testPubKey))
+			},
+			valid:          true,
+			encodedInvoice: "lntmona241pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsnp4q0n326hr8v9zprg8gsvezcch06gfaqqhde2aj730yg0durunfhv66p582zl8c2phnhr3zhyty2e6q8pdchxz28r26w85zzg3ur9m2tmvptdj44k9pa20e523ku04nuec3qf0pw7988w5c35t7mzzd49qnw7cpyn0wse",
+		},
+		{
+			// Create a monacoin mainnet invoice
+			newInvoice: func() (*Invoice, error) {
+				return NewInvoice(&monaMainNetParams,
+					testPaymentHash, time.Unix(1496314658, 0),
+					Amount(testMillisat24BTC),
+					DescriptionHash(testDescriptionHash),
+					Destination(testPubKey))
+			},
+			valid:          true,
+			encodedInvoice: "lnmona241pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsnp4q0n326hr8v9zprg8gsvezcch06gfaqqhde2aj730yg0durunfhv66wsqdsfugfgtjqkap44j4k0g6ekhh4h6y7xm2xkjyczlkqxxqmgczj3hnpqj7g0fad5ghxqd3cnmtwng8xcv6z5w63wmcdmg6qsaaegsqm2sv75",
 		},
 	}
 
