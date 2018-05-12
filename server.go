@@ -16,12 +16,14 @@ import (
 	"time"
 
 	"github.com/coreos/bbolt"
+	"github.com/go-errors/errors"
 	"github.com/wakiyamap/lightning-onion"
 	"github.com/wakiyamap/lnd/autopilot"
 	"github.com/wakiyamap/lnd/brontide"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/contractcourt"
 	"github.com/wakiyamap/lnd/discovery"
+	"github.com/wakiyamap/lnd/htlcswitch"
 	"github.com/wakiyamap/lnd/lnrpc"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
@@ -31,9 +33,6 @@ import (
 	"github.com/roasbeef/btcd/connmgr"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
-
-	"github.com/go-errors/errors"
-	"github.com/wakiyamap/lnd/htlcswitch"
 )
 
 var (
@@ -92,6 +91,13 @@ type server struct {
 	// watcher to short circuit in the event that peers are purposefully
 	// disconnected.
 	ignorePeerTermination map[*peer]struct{}
+
+	// scheduledPeerConnection maps a pubkey string to a callback that
+	// should be executed in the peerTerminationWatcher the prior peer with
+	// the same pubkey exits.  This allows the server to wait until the
+	// prior peer has cleaned up successfully, before adding the new peer
+	// intended to replace it.
+	scheduledPeerConnection map[string]func()
 
 	cc *chainControl
 
@@ -160,9 +166,8 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 	// the same directory as the channel graph database.
 	graphDir := chanDB.Path()
 	sharedSecretPath := filepath.Join(graphDir, "sphinxreplay.db")
-	sphinxRouter := sphinx.NewRouter(
-		sharedSecretPath, privKey, activeNetParams.Params, cc.chainNotifier,
-	)
+	replayLog := htlcswitch.NewDecayedLog(sharedSecretPath, cc.chainNotifier)
+	sphinxRouter := sphinx.NewRouter(privKey, activeNetParams.Params, replayLog)
 
 	s := &server{
 		chanDB: chanDB,
@@ -178,11 +183,12 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 		sphinx:      htlcswitch.NewOnionProcessor(sphinxRouter),
 		lightningID: sha256.Sum256(serializedPubKey[:]),
 
-		persistentPeers:        make(map[string]struct{}),
-		persistentPeersBackoff: make(map[string]time.Duration),
-		persistentConnReqs:     make(map[string][]*connmgr.ConnReq),
-		persistentRetryCancels: make(map[string]chan struct{}),
-		ignorePeerTermination:  make(map[*peer]struct{}),
+		persistentPeers:         make(map[string]struct{}),
+		persistentPeersBackoff:  make(map[string]time.Duration),
+		persistentConnReqs:      make(map[string][]*connmgr.ConnReq),
+		persistentRetryCancels:  make(map[string]chan struct{}),
+		ignorePeerTermination:   make(map[*peer]struct{}),
+		scheduledPeerConnection: make(map[string]func()),
 
 		peersByPub:             make(map[string]*peer),
 		inboundPeers:           make(map[string]*peer),
@@ -1092,7 +1098,7 @@ func (s *server) SendToPeer(target *btcec.PublicKey,
 		case err := <-errChan:
 			return err
 		case <-targetPeer.quit:
-			return fmt.Errorf("peer shutting down")
+			return ErrPeerExiting
 		case <-s.quit:
 			return ErrServerShuttingDown
 		}
@@ -1184,7 +1190,8 @@ func (s *server) sendPeerMessages(
 	// event, we defer a call to Done on both WaitGroups to 1) ensure that
 	// server will be able to shutdown after its go routines exit, and 2)
 	// so the server can return to the caller of BroadcastMessage.
-	if wg != nil {
+	isBroadcast := wg != nil
+	if isBroadcast {
 		defer s.wg.Done()
 		defer wg.Done()
 	}
@@ -1194,9 +1201,16 @@ func (s *server) sendPeerMessages(
 	// the queue.
 	var errChans []chan error
 	for _, msg := range msgs {
-		errChan := make(chan error, 1)
+		// If this is not broadcast, create error channels to provide
+		// synchronous feedback regarding the delivery of the message to
+		// a specific peer.
+		var errChan chan error
+		if !isBroadcast {
+			errChan = make(chan error, 1)
+			errChans = append(errChans, errChan)
+		}
+
 		targetPeer.queueMsg(msg, errChan)
-		errChans = append(errChans, errChan)
 	}
 
 	return errChans
@@ -1291,6 +1305,20 @@ func (s *server) peerTerminationWatcher(p *peer) {
 	// peer termination watcher and skip cleanup.
 	if _, ok := s.ignorePeerTermination[p]; ok {
 		delete(s.ignorePeerTermination, p)
+
+		pubKey := p.PubKey()
+		pubStr := string(pubKey[:])
+
+		// If a connection callback is present, we'll go ahead and
+		// execute it now that previous peer has fully disconnected. If
+		// the callback is not present, this likely implies the peer was
+		// purposefully disconnected via RPC, and that no reconnect
+		// should be attempted.
+		connCallback, ok := s.scheduledPeerConnection[pubStr]
+		if ok {
+			delete(s.scheduledPeerConnection, pubStr)
+			connCallback()
+		}
 		return
 	}
 
@@ -1481,7 +1509,22 @@ func (s *server) InboundPeerConnected(conn net.Conn) {
 		return
 	}
 
+	// If we already have a valid connection that is scheduled to take
+	// precedence once the prior peer has finished disconnecting, we'll
+	// ignore this connection.
+	if _, ok := s.scheduledPeerConnection[pubStr]; ok {
+		srvrLog.Debugf("Ignoring connection, peer already scheduled")
+		conn.Close()
+		return
+	}
+
 	srvrLog.Infof("New inbound connection from %v", conn.RemoteAddr())
+
+	// Cancel all pending connection requests, we either already have an
+	// outbound connection, or this incoming connection will become our
+	// primary connection. The incoming connection will not have an
+	// associated connection request, so we pass nil.
+	s.cancelConnReqs(pubStr, nil)
 
 	// Check to see if we already have a connection with this peer. If so,
 	// we may need to drop our existing connection. This prevents us from
@@ -1493,6 +1536,7 @@ func (s *server) InboundPeerConnected(conn net.Conn) {
 	case ErrPeerNotConnected:
 		// We were unable to locate an existing connection with the
 		// target peer, proceed to connect.
+		s.peerConnected(conn, nil, false)
 
 	case nil:
 		// We already have a connection with the incoming peer. If the
@@ -1518,13 +1562,10 @@ func (s *server) InboundPeerConnected(conn net.Conn) {
 		// execute for this peer.
 		s.removePeer(connectedPeer)
 		s.ignorePeerTermination[connectedPeer] = struct{}{}
+		s.scheduledPeerConnection[pubStr] = func() {
+			s.peerConnected(conn, nil, false)
+		}
 	}
-
-	// Lastly, cancel all pending requests. The incoming connection will not
-	// have an associated connection request.
-	s.cancelConnReqs(pubStr, nil)
-
-	s.peerConnected(conn, nil, false)
 }
 
 // OutboundPeerConnected initializes a new peer in response to a new outbound
@@ -1560,6 +1601,15 @@ func (s *server) OutboundPeerConnected(connReq *connmgr.ConnReq, conn net.Conn) 
 		return
 	}
 
+	// If we already have a valid connection that is scheduled to take
+	// precedence once the prior peer has finished disconnecting, we'll
+	// ignore this connection.
+	if _, ok := s.scheduledPeerConnection[pubStr]; ok {
+		srvrLog.Debugf("Ignoring connection, peer already scheduled")
+		conn.Close()
+		return
+	}
+
 	srvrLog.Infof("Established connection to: %v", conn.RemoteAddr())
 
 	if connReq != nil {
@@ -1583,6 +1633,7 @@ func (s *server) OutboundPeerConnected(connReq *connmgr.ConnReq, conn net.Conn) 
 	case ErrPeerNotConnected:
 		// We were unable to locate an existing connection with the
 		// target peer, proceed to connect.
+		s.peerConnected(conn, connReq, true)
 
 	case nil:
 		// We already have a connection open with the target peer.
@@ -1612,9 +1663,10 @@ func (s *server) OutboundPeerConnected(connReq *connmgr.ConnReq, conn net.Conn) 
 		// execute for this peer.
 		s.removePeer(connectedPeer)
 		s.ignorePeerTermination[connectedPeer] = struct{}{}
+		s.scheduledPeerConnection[pubStr] = func() {
+			s.peerConnected(conn, connReq, true)
+		}
 	}
-
-	s.peerConnected(conn, connReq, true)
 }
 
 // UnassignedConnID is the default connection ID that a request can have before

@@ -793,39 +793,37 @@ func testUpdateChannelPolicy(net *lntest.NetworkHarness, t *harnessTest) {
 		for {
 			select {
 			case graphUpdate := <-graphUpdates:
-				if len(graphUpdate.ChannelUpdates) == 0 {
-					continue
-				}
-				chanUpdate := graphUpdate.ChannelUpdates[0]
-				fundingTxStr := txStr(chanUpdate.ChanPoint)
-				if _, ok := cps[fundingTxStr]; !ok {
-					continue
-				}
+				for _, update := range graphUpdate.ChannelUpdates {
+					fundingTxStr := txStr(update.ChanPoint)
+					if _, ok := cps[fundingTxStr]; !ok {
+						continue
+					}
 
-				if chanUpdate.AdvertisingNode != advertisingNode {
-					continue
-				}
+					if update.AdvertisingNode != advertisingNode {
+						continue
+					}
 
-				policy := chanUpdate.RoutingPolicy
-				if policy.FeeBaseMsat != baseFee {
-					continue
-				}
-				if policy.FeeRateMilliMsat != feeRate*feeBase {
-					continue
-				}
-				if policy.TimeLockDelta != timeLockDelta {
-					continue
-				}
+					policy := update.RoutingPolicy
+					if policy.FeeBaseMsat != baseFee {
+						continue
+					}
+					if policy.FeeRateMilliMsat != feeRate*feeBase {
+						continue
+					}
+					if policy.TimeLockDelta != timeLockDelta {
+						continue
+					}
 
-				// We got a policy update that matched the
-				// values and channel point of what we
-				// expected, delete it from the map.
-				delete(cps, fundingTxStr)
+					// We got a policy update that matched the
+					// values and channel point of what we
+					// expected, delete it from the map.
+					delete(cps, fundingTxStr)
 
-				// If we have no more channel points we are
-				// waiting for, break out of the loop.
-				if len(cps) == 0 {
-					break Loop
+					// If we have no more channel points we are
+					// waiting for, break out of the loop.
+					if len(cps) == 0 {
+						break Loop
+					}
 				}
 			case <-time.After(20 * time.Second):
 				t.Fatalf("did not receive channel update")
@@ -967,9 +965,15 @@ func testUpdateChannelPolicy(net *lntest.NetworkHarness, t *harnessTest) {
 
 	// Wait for all nodes to have seen the policy updates for both of
 	// Alice's channels.
-	waitForChannelUpdate(aliceUpdates, net.Alice.PubKeyStr, chanPoint3)
-	waitForChannelUpdate(bobUpdates, net.Alice.PubKeyStr, chanPoint3)
-	waitForChannelUpdate(carolUpdates, net.Alice.PubKeyStr, chanPoint3)
+	waitForChannelUpdate(
+		aliceUpdates, net.Alice.PubKeyStr, chanPoint, chanPoint3,
+	)
+	waitForChannelUpdate(
+		bobUpdates, net.Alice.PubKeyStr, chanPoint, chanPoint3,
+	)
+	waitForChannelUpdate(
+		carolUpdates, net.Alice.PubKeyStr, chanPoint, chanPoint3,
+	)
 
 	// And finally check that all nodes remembers the policy update they
 	// received.
@@ -3433,23 +3437,27 @@ func testInvoiceRoutingHints(net *lntest.NetworkHarness, t *harnessTest) {
 		Private: true,
 	}
 
-	resp, err := net.Alice.AddInvoice(ctxb, invoice)
-	if err != nil {
-		t.Fatalf("unable to add invoice: %v", err)
-	}
-
-	// We'll decode the invoice's payment request to determine which
-	// channels were used as routing hints.
-	payReq := &lnrpc.PayReqString{resp.PaymentRequest}
-	decoded, err := net.Alice.DecodePayReq(ctxb, payReq)
-	if err != nil {
-		t.Fatalf("unable to decode payment request: %v", err)
-	}
-
 	// Due to the way the channels were set up above, the channel between
 	// Alice and Bob should be the only channel used as a routing hint.
 	var predErr error
+	var decoded *lnrpc.PayReq
 	err = lntest.WaitPredicate(func() bool {
+		resp, err := net.Alice.AddInvoice(ctxb, invoice)
+		if err != nil {
+			predErr = fmt.Errorf("unable to add invoice: %v", err)
+			return false
+		}
+
+		// We'll decode the invoice's payment request to determine which
+		// channels were used as routing hints.
+		payReq := &lnrpc.PayReqString{resp.PaymentRequest}
+		decoded, err = net.Alice.DecodePayReq(ctxb, payReq)
+		if err != nil {
+			predErr = fmt.Errorf("unable to decode payment "+
+				"request: %v", err)
+			return false
+		}
+
 		if len(decoded.RouteHints) != 1 {
 			predErr = fmt.Errorf("expected one route hint, got %d",
 				len(decoded.RouteHints))
@@ -6518,7 +6526,7 @@ func testMultiHopReceiverChainClaim(net *lntest.NetworkHarness, t *harnessTest) 
 		return true
 	}, time.Second*15)
 	if err != nil {
-		t.Fatalf("htlc mismatch: %v", err)
+		t.Fatalf("htlc mismatch: %v", predErr)
 	}
 
 	// Now we'll mine enough blocks to prompt carol to actually go to the
