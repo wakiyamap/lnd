@@ -44,7 +44,7 @@
 
 [[constraint]]
   name = "github.com/wakiyamap/lightning-onion"
-  revision = "0e90ff3620fca585d97492c7de90f159686b2667"
+  revision = "4efbde631b9d74cbc687068c2c7fc364da215087"
 
 [[constraint]]
   name = "github.com/wakiyamap/monad"

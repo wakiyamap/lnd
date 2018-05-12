@@ -252,7 +252,7 @@
 [[projects]]
   name = "github.com/wakiyamap/lightning-onion"
   packages = ["."]
-  revision = "0e90ff3620fca585d97492c7de90f159686b2667"
+  revision = "4efbde631b9d74cbc687068c2c7fc364da215087"
 
 [[projects]]
   branch = "master"
@@ -387,6 +387,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "4b93c62a50234bbe5eb126f1b818142512fea0b413816064bb06d0f8f0810df2"
+  inputs-digest = "80419ac409bfd8f0a06b3bbfa01fee912b44e437e4b4b25efc781ae07a9f802a"
   solver-name = "gps-cdcl"
   solver-version = 1
