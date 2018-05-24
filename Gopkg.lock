@@ -173,6 +173,15 @@
   revision = "36d9a509ff4ea1e916a73c6f1c2b784c1faf11ed"
 
 [[projects]]
+  branch = "master"
+  name = "github.com/lightningnetwork/lnd"
+  packages = [
+    "keychain",
+    "macaroons"
+  ]
+  revision = "6382215346968b69b8b0f5553b7c0bf39e01c550"
+
+[[projects]]
   name = "github.com/miekg/dns"
   packages = [
     ".",
@@ -387,6 +396,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "80419ac409bfd8f0a06b3bbfa01fee912b44e437e4b4b25efc781ae07a9f802a"
+  inputs-digest = "bcf238ec646e30c9426f404cfb8faff4cf23e8a9bda56a23b64d0917055b0d85"
   solver-name = "gps-cdcl"
   solver-version = 1

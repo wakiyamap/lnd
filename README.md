@@ -1,7 +1,7 @@
 ## Lightning Network Daemon
 
 [![Build Status](http://img.shields.io/travis/wakiyamap/lnd.svg)](https://travis-ci.org/wakiyamap/lnd) 
-[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wakiyamap/lnd/blob/master/LICENSE) 
+[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/lightningnetwork/lnd/blob/master/LICENSE) 
 [![Irc](https://img.shields.io/badge/chat-on%20freenode-brightgreen.svg)](https://webchat.freenode.net/?channels=lnd) 
 [![Godoc](https://godoc.org/github.com/lightningnetwork/lnd?status.svg)](https://godoc.org/github.com/lightningnetwork/lnd)
 
@@ -15,7 +15,7 @@ full-node), [`bitcoind`](https://github.com/bitcoin/bitcoin), and
 [`neutrino`](https://github.com/lightninglabs/neutrino) (a new experimental light client). The project's codebase uses the
 [btcsuite](https://github.com/btcsuite/) set of Bitcoin libraries, and also
 exports a large set of isolated re-usable Lightning Network related libraries
-within it.  In the current state `lnd` is capable of: 
+within it.  In the current state `lnd` is capable of:
 * Creating channels.
 * Closing channels.
 * Completely managing all channel states (including the exceptional ones!).
@@ -66,6 +66,9 @@ discuss various aspects of `lnd` and also Lightning in general.
 ## Installation
   In order to build from source, please see [the installation
   instructions](docs/INSTALL.md).
+
+## Docker
+  To run lnd from Docker, please see the main [Docker instructions](docs/DOCKER.md)
   
 ## IRC
   * irc.freenode.net
