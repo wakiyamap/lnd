@@ -44,6 +44,10 @@ const (
 	defaultMonacoinTimeLockDelta = 960
 	defaultMonacoinStaticFeeRate = lnwallet.SatPerVByte(200)
 	defaultMonacoinDustLimit     = btcutil.Amount(54600)
+
+	// btcToMonaConversionRate is a fixed ratio used in order to scale up
+	// payments when running on the Monacoin chain.
+	btcToMonaConversionRate = 60
 )
 
 // defaultBtcChannelConstraints is the default set of channel constraints that are
