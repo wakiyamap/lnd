@@ -64,7 +64,7 @@ const (
 	maxBtcFundingAmount = btcutil.Amount(1<<24) - 1
 
 	// maxMonaFundingAmount is a soft-limit of the maximum channel size
-	// currently accepted on the Litecoin chain within the Lightning
+	// currently accepted on the Monacoin chain within the Lightning
 	// Protocol.
 	maxMonaFundingAmount = maxBtcFundingAmount * btcToMonaConversionRate
 )

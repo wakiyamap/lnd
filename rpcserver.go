@@ -44,7 +44,7 @@ const (
 	// permitted as defined in BOLT-0002.
 	maxBtcPaymentMSat = lnwire.MilliSatoshi(math.MaxUint32)
 
-	// maxMonaPaymentMSat is the maximum allowed Litecoin payment currently
+	// maxMonaPaymentMSat is the maximum allowed Monacoin payment currently
 	// permitted.
 	maxMonaPaymentMSat = lnwire.MilliSatoshi(math.MaxUint32) *
 		btcToMonaConversionRate
