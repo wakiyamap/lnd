@@ -13,6 +13,25 @@
   revision = "e06297f34865a50b8e473105e52cb64ad1b55da8"
 
 [[projects]]
+  branch = "master"
+  name = "github.com/NebulousLabs/fastrand"
+  packages = ["."]
+  revision = "3cf7173006a0b7d2371fa1a220da7f9d48c7827c"
+
+[[projects]]
+  name = "github.com/NebulousLabs/go-upnp"
+  packages = [
+    ".",
+    "goupnp",
+    "goupnp/dcps/internetgateway1",
+    "goupnp/httpu",
+    "goupnp/scpd",
+    "goupnp/soap",
+    "goupnp/ssdp"
+  ]
+  revision = "29b680b06c82d044ebea91bf3069038eb562df2a"
+
+[[projects]]
   name = "github.com/Yawning/aez"
   packages = ["."]
   revision = "4dad034d9db2caec23fb8f69b9160ae16f8d46a3"
@@ -106,10 +125,10 @@
   revision = "8991bc29aa16c548c550c7ff78260e27b9ab7c73"
 
 [[projects]]
-  branch = "master"
   name = "github.com/dchest/blake256"
   packages = ["."]
   revision = "dee3fe6eb0e98dc774a94fc231f85baf7c29d360"
+  version = "v1.0.0"
 
 [[projects]]
   name = "github.com/go-errors/errors"
@@ -137,6 +156,17 @@
   revision = "f2862b476edcef83412c7af8687c9cd8e4097c0f"
 
 [[projects]]
+  name = "github.com/jackpal/gateway"
+  packages = ["."]
+  revision = "3e333950771011fed13be63e62b9f473c5e0d9bf"
+  version = "v1.0.4"
+
+[[projects]]
+  name = "github.com/jackpal/go-nat-pmp"
+  packages = ["."]
+  revision = "28a68d0c24adce1da43f8df6a57340909ecd7fdd"
+
+[[projects]]
   name = "github.com/jessevdk/go-flags"
   packages = ["."]
   revision = "f88afde2fa19a30cf50ba4b05b3d13bc6bae3079"
@@ -150,7 +180,7 @@
   branch = "master"
   name = "github.com/juju/loggo"
   packages = ["."]
-  revision = "7f1609ff1f3fcf3519ed62ccaaa9e609ea287838"
+  revision = "584905176618da46b895b176c721b02c476b6993"
 
 [[projects]]
   name = "github.com/kkdai/bstream"
@@ -171,15 +201,6 @@
     "headerfs"
   ]
   revision = "36d9a509ff4ea1e916a73c6f1c2b784c1faf11ed"
-
-[[projects]]
-  branch = "master"
-  name = "github.com/lightningnetwork/lnd"
-  packages = [
-    "keychain",
-    "macaroons"
-  ]
-  revision = "6382215346968b69b8b0f5553b7c0bf39e01c550"
 
 [[projects]]
   name = "github.com/miekg/dns"
@@ -303,6 +324,9 @@
   name = "golang.org/x/net"
   packages = [
     "context",
+    "html",
+    "html/atom",
+    "html/charset",
     "http2",
     "http2/hpack",
     "idna",
@@ -321,19 +345,31 @@
     "unix",
     "windows"
   ]
-  revision = "d0faeb539838e250bd0a9db4182d48d4a1915181"
+  revision = "6c888cc515d3ed83fc103cf1d84468aad274b0a7"
 
 [[projects]]
   name = "golang.org/x/text"
   packages = [
     "collate",
     "collate/build",
+    "encoding",
+    "encoding/charmap",
+    "encoding/htmlindex",
+    "encoding/internal",
+    "encoding/internal/identifier",
+    "encoding/japanese",
+    "encoding/korean",
+    "encoding/simplifiedchinese",
+    "encoding/traditionalchinese",
+    "encoding/unicode",
     "internal/colltab",
     "internal/gen",
     "internal/tag",
     "internal/triegen",
     "internal/ucd",
+    "internal/utf8internal",
     "language",
+    "runes",
     "secure/bidirule",
     "transform",
     "unicode/bidi",
@@ -396,6 +432,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "bcf238ec646e30c9426f404cfb8faff4cf23e8a9bda56a23b64d0917055b0d85"
+  inputs-digest = "7bf07dda477e395dff2590bcf422bd62b77155869a481270de4f0ad11c4745d4"
   solver-name = "gps-cdcl"
   solver-version = 1
