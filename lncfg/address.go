@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lightningnetwork/lnd/tor"
+	"github.com/wakiyamap/lnd/tor"
 )
 
 var (
