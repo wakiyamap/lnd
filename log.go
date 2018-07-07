@@ -20,6 +20,7 @@ import (
 	"github.com/wakiyamap/lnd/htlcswitch"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/routing"
+	"github.com/wakiyamap/lnd/signal"
 	"github.com/roasbeef/btcd/connmgr"
 )
 
@@ -89,6 +90,7 @@ func init() {
 	autopilot.UseLogger(atplLog)
 	contractcourt.UseLogger(cnctLog)
 	sphinx.UseLogger(sphxLog)
+	signal.UseLogger(ltndLog)
 }
 
 // subsystemLoggers maps each subsystem identifier to its associated logger.

@@ -64,6 +64,14 @@ cd $GOPATH/src/github.com/wakiyamap/lnd
 make && make install
 ```
 
+For Windows WSL users, make will need to be referenced directly via /usr/bin/make/, or alternatively by wrapping quotation marks around make, like so:
+
+```
+/usr/bin/make && /usr/bin/make install
+
+"make" && "make" install
+```
+
 Alternatively, if one doesn't wish to use `make`, then the `go` commands can be
 used directly:
 ```
@@ -99,7 +107,7 @@ make check
 
 ### Installing btcd
 
-When using the `btcd` backend, `lnd` currently requires the
+If one wishes to use the `btcd` backend, `lnd` currently requires the
 [roasbeef](https://github.com/roasbeef/btcd) fork of `btcd` due to neutrino
 additions that are not yet available in the master branch. To install, run the
 following commands:
@@ -114,11 +122,13 @@ make btcd
 Running the following command will create `rpc.cert` and default `btcd.conf`.
 
 ```
-btcd --testnet --txindex --rpcuser=REPLACEME --rpcpass=REPLACEME
+btcd --testnet --rpcuser=REPLACEME --rpcpass=REPLACEME
 ```
 If you want to use `lnd` on testnet, `btcd` needs to first fully sync the
 testnet blockchain. Depending on your hardware, this may take up to a few
-hours.
+hours. Note that adding `--txindex` is optional, as it will take longer to sync
+the node, but then `lnd` will generally operate faster as it can hit the index
+directly, rather than scanning blocks or BIP 158 filters for relevant items.
 
 (NOTE: It may take several minutes to find segwit-enabled peers.)
 
@@ -202,14 +212,15 @@ The configuration for bitcoind and monacoind are nearly identical, the following
 steps can be mirrored with loss of generality to enable a monacoind backend.
 Setup will be described in regards to `bitcoind`, but note that `lnd` uses a
 distinct `monacoin.node=monacoind` argument and analogous subconfigurations
-prefixed by `monacoind`.
+prefixed by `monacoind`. Note that adding `--txindex` is optional, as it will
+take longer to sync the node, but then `lnd` will generally operate faster as
+it can hit the index directly, rather than scanning blocks or BIP 158 filters
+for relevant items.
 
 To configure your bitcoind backend for use with lnd, first complete and verify
 the following:
 
-- The `bitcoind` instance must be configured with `--txindex` just like `btcd`
-  above
-- Additionally, since `lnd` uses
+- Since `lnd` uses
   [ZeroMQ](https://github.com/bitcoin/bitcoin/blob/master/doc/zmq.md) to
   interface with `bitcoind`, *your `bitcoind` installation must be compiled with
   ZMQ*. Note that if you installed `bitcoind` from source and ZMQ was not present, 
@@ -228,7 +239,6 @@ the following:
 Here's a sample `bitcoin.conf` for use with lnd:
 ```
 testnet=1
-txindex=1
 server=1
 daemon=1
 zmqpubrawblock=tcp://127.0.0.1:28332
