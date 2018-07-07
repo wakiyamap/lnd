@@ -9,6 +9,7 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/lnwire"
+	"github.com/wakiyamap/lnd/zpay32"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcutil"
 )
@@ -54,10 +55,10 @@ func newInvoiceRegistry(cdb *channeldb.DB) *invoiceRegistry {
 	}
 }
 
-// addDebugInvoice adds a debug invoice for the specified amount, identified
+// AddDebugInvoice adds a debug invoice for the specified amount, identified
 // by the passed preimage. Once this invoice is added, subsystems within the
-// daemon add/forward HTLCs are able to obtain the proper preimage required
-// for redemption in the case that we're the final destination.
+// daemon add/forward HTLCs that are able to obtain the proper preimage
+// required for redemption in the case that we're the final destination.
 func (i *invoiceRegistry) AddDebugInvoice(amt btcutil.Amount, preimage chainhash.Hash) {
 	paymentHash := chainhash.Hash(sha256.Sum256(preimage[:]))
 
@@ -95,10 +96,14 @@ func (i *invoiceRegistry) AddInvoice(invoice *channeldb.Invoice) error {
 	//go i.notifyClients(invoice, false)
 }
 
-// lookupInvoice looks up an invoice by its payment hash (R-Hash), if found
-// then we're able to pull the funds pending within an HTLC.
+// LookupInvoice looks up an invoice by its payment hash (R-Hash), if found
+// then we're able to pull the funds pending within an HTLC. We'll also return
+// what the expected min final CLTV delta is, pre-parsed from the payment
+// request. This may be used by callers to determine if an HTLC is well formed
+// according to the cltv delta.
+//
 // TODO(roasbeef): ignore if settled?
-func (i *invoiceRegistry) LookupInvoice(rHash chainhash.Hash) (channeldb.Invoice, error) {
+func (i *invoiceRegistry) LookupInvoice(rHash chainhash.Hash) (channeldb.Invoice, uint32, error) {
 	// First check the in-memory debug invoice index to see if this is an
 	// existing invoice added for debugging.
 	i.RLock()
@@ -107,17 +112,24 @@ func (i *invoiceRegistry) LookupInvoice(rHash chainhash.Hash) (channeldb.Invoice
 
 	// If found, then simply return the invoice directly.
 	if ok {
-		return *invoice, nil
+		return *invoice, 0, nil
 	}
 
 	// Otherwise, we'll check the database to see if there's an existing
 	// matching invoice.
 	invoice, err := i.cdb.LookupInvoice(rHash)
 	if err != nil {
-		return channeldb.Invoice{}, err
+		return channeldb.Invoice{}, 0, err
 	}
 
-	return *invoice, nil
+	payReq, err := zpay32.Decode(
+		string(invoice.PaymentRequest), activeNetParams.Params,
+	)
+	if err != nil {
+		return channeldb.Invoice{}, 0, err
+	}
+
+	return *invoice, uint32(payReq.MinFinalCLTVExpiry()), nil
 }
 
 // SettleInvoice attempts to mark an invoice as settled. If the invoice is a
