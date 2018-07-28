@@ -154,7 +154,6 @@
     "nacl/secretbox",
     "pbkdf2",
     "poly1305",
-    "ripemd160",
     "salsa20/salsa",
     "scrypt",
     "ssh/terminal"
@@ -265,27 +264,6 @@
 
 [[projects]]
   branch = "master"
-  name = "github.com/roasbeef/btcd"
-  packages = [
-    "btcec",
-    "chaincfg",
-    "chaincfg/chainhash",
-    "wire"
-  ]
-  revision = "a03db407e40d3b66ea29984263bbc8bf4d2f04c4"
-
-[[projects]]
-  branch = "master"
-  name = "github.com/roasbeef/btcutil"
-  packages = [
-    ".",
-    "base58",
-    "bech32"
-  ]
-  revision = "dfb640c57141f1c2113b92b4b16d2a89c30dd258"
-
-[[projects]]
-  branch = "master"
   name = "github.com/rogpeppe/fastuuid"
   packages = ["."]
   revision = "6724a57986aff9bff1a1770e9347036def7c89f6"
@@ -303,7 +281,7 @@
 [[projects]]
   name = "github.com/wakiyamap/lightning-onion"
   packages = ["."]
-  revision = "4efbde631b9d74cbc687068c2c7fc364da215087"
+  revision = "7db36de16515ebbe14e785eeccb5ca15252224e1"
 
 [[projects]]
   branch = "master"
@@ -453,6 +431,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "d3cc0931370cf6514aef4b428218a0929d9c6384e7a3f8005e9afb29ccd670b6"
+  inputs-digest = "07cd1ee67f1f5ee7e76ad01d8c7364f42d0ceef70f91847ae64dc7a4b1431451"
   solver-name = "gps-cdcl"
   solver-version = 1
