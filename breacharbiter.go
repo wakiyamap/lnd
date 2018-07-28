@@ -8,17 +8,17 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/btcsuite/btcd/blockchain"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil"
 	"github.com/coreos/bbolt"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/htlcswitch"
 	"github.com/wakiyamap/lnd/lnwallet"
-	"github.com/roasbeef/btcd/blockchain"
-	"github.com/roasbeef/btcd/chaincfg/chainhash"
-	"github.com/roasbeef/btcd/txscript"
-	"github.com/roasbeef/btcd/wire"
-	"github.com/roasbeef/btcutil"
 )
 
 var (
@@ -357,7 +357,7 @@ func (b *breachArbiter) waitForSpendEvent(breachInfo *retributionInfo,
 			var err error
 			spendNtfn, err = b.cfg.Notifier.RegisterSpendNtfn(
 				&breachedOutput.outpoint,
-				breachInfo.breachHeight, true,
+				breachInfo.breachHeight,
 			)
 			if err != nil {
 				brarLog.Errorf("unable to check for spentness "+
@@ -993,7 +993,7 @@ func (b *breachArbiter) createJusticeTx(
 			witnessWeight = lnwallet.AcceptedHtlcPenaltyWitnessSize
 
 		case lnwallet.HtlcSecondLevelRevoke:
-			witnessWeight = lnwallet.SecondLevelHtlcPenaltyWitnessSize
+			witnessWeight = lnwallet.ToLocalPenaltyWitnessSize
 
 		default:
 			brarLog.Warnf("breached output in retribution info "+

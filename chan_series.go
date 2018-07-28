@@ -7,7 +7,7 @@ import (
 	"github.com/wakiyamap/lnd/discovery"
 	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/wakiyamap/lnd/routing"
-	"github.com/roasbeef/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 )
 
 // chanSeries is an implementation of the discovery.ChannelGraphTimeSeries

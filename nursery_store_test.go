@@ -10,7 +10,7 @@ import (
 
 	"github.com/btcsuite/btclog"
 	"github.com/wakiyamap/lnd/channeldb"
-	"github.com/roasbeef/btcd/wire"
+	"github.com/btcsuite/btcd/wire"
 )
 
 func init() {

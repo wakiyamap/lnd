@@ -17,7 +17,7 @@ import (
 	"github.com/wakiyamap/lnd/lncfg"
 	"github.com/wakiyamap/lnd/lnrpc"
 	"github.com/wakiyamap/lnd/macaroons"
-	"github.com/roasbeef/btcutil"
+	"github.com/btcsuite/btcutil"
 	"github.com/urfave/cli"
 
 	"google.golang.org/grpc"

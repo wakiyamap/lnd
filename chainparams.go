@@ -4,10 +4,10 @@ import (
 	"github.com/wakiyamap/lnd/keychain"
 	monacoinCfg "github.com/wakiyamap/monad/chaincfg"
 	monacoinWire "github.com/wakiyamap/monad/wire"
-	"github.com/roasbeef/btcd/chaincfg"
-	bitcoinCfg "github.com/roasbeef/btcd/chaincfg"
-	"github.com/roasbeef/btcd/chaincfg/chainhash"
-	bitcoinWire "github.com/roasbeef/btcd/wire"
+	"github.com/btcsuite/btcd/chaincfg"
+	bitcoinCfg "github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	bitcoinWire "github.com/btcsuite/btcd/wire"
 )
 
 // activeNetParams is a pointer to the parameters specific to the currently

@@ -7,7 +7,7 @@ import (
 
 	"github.com/wakiyamap/lightning-onion"
 	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/roasbeef/btcd/btcec"
+	"github.com/btcsuite/btcd/btcec"
 )
 
 // ForwardingError wraps an lnwire.FailureMessage in a struct that also

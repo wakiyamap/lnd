@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"reflect"
 	"runtime"
 	"strings"
@@ -23,10 +24,10 @@ import (
 	"github.com/wakiyamap/lnd/lnpeer"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/roasbeef/btcd/btcec"
-	"github.com/roasbeef/btcd/chaincfg/chainhash"
-	"github.com/roasbeef/btcd/wire"
-	"github.com/roasbeef/btcutil"
+	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil"
 )
 
 const (
@@ -1411,6 +1412,9 @@ func (m *mockPeer) SendMessage(sync bool, msgs ...lnwire.Message) error {
 	}
 	return nil
 }
+func (m *mockPeer) AddNewChannel(_ *lnwallet.LightningChannel, _ <-chan struct{}) error {
+	return nil
+}
 func (m *mockPeer) WipeChannel(*wire.OutPoint) error {
 	return nil
 }
@@ -1420,8 +1424,9 @@ func (m *mockPeer) PubKey() [33]byte {
 func (m *mockPeer) IdentityKey() *btcec.PublicKey {
 	return nil
 }
-
-var _ lnpeer.Peer = (*mockPeer)(nil)
+func (m *mockPeer) Address() net.Addr {
+	return nil
+}
 
 func newSingleLinkTestHarness(chanAmt, chanReserve btcutil.Amount) (
 	ChannelLink, *lnwallet.LightningChannel, chan time.Time, func() error,
@@ -3656,6 +3661,13 @@ func TestChannelLinkAcceptOverpay(t *testing.T) {
 	if expectedCarolBandwidth != n.carolChannelLink.Bandwidth() {
 		t.Fatalf("channel bandwidth incorrect: expected %v, got %v",
 			expectedCarolBandwidth, n.carolChannelLink.Bandwidth())
+	}
+
+	// Finally, we'll ensure that the amount we paid is properly reflected
+	// in the stored invoice.
+	if invoice.AmtPaid != amount {
+		t.Fatalf("expected amt paid to be %v, is instead %v", amount,
+			invoice.AmtPaid)
 	}
 }
 

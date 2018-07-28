@@ -7,15 +7,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/btcsuite/btcd/btcjson"
+	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/rpcclient"
+	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil"
+	"github.com/btcsuite/btcwallet/chain"
+	"github.com/btcsuite/btcwallet/wtxmgr"
 	"github.com/wakiyamap/lnd/chainntnfs"
-	"github.com/roasbeef/btcd/btcjson"
-	"github.com/roasbeef/btcd/chaincfg"
-	"github.com/roasbeef/btcd/chaincfg/chainhash"
-	"github.com/roasbeef/btcd/rpcclient"
-	"github.com/roasbeef/btcd/wire"
-	"github.com/roasbeef/btcutil"
-	"github.com/roasbeef/btcwallet/chain"
-	"github.com/roasbeef/btcwallet/wtxmgr"
 )
 
 const (
@@ -331,6 +331,14 @@ out:
 // handleRelevantTx notifies any clients of a relevant transaction.
 func (b *BitcoindNotifier) handleRelevantTx(tx chain.RelevantTx, bestHeight int32) {
 	msgTx := tx.TxRecord.MsgTx
+
+	// We only care about notifying on confirmed spends, so in case this is
+	// a mempool spend, we can continue, and wait for the spend to appear
+	// in chain.
+	if tx.Block == nil {
+		return
+	}
+
 	// First, check if this transaction spends an output
 	// that has an existing spend notification for it.
 	for i, txIn := range msgTx.TxIn {
@@ -349,23 +357,18 @@ func (b *BitcoindNotifier) handleRelevantTx(tx chain.RelevantTx, bestHeight int3
 				SpendingTx:        &msgTx,
 				SpenderInputIndex: uint32(i),
 			}
-			// TODO(roasbeef): after change to
-			// loadfilter, only notify on block
-			// inclusion?
-			if tx.Block != nil {
-				spendDetails.SpendingHeight = tx.Block.Height
-			} else {
-				spendDetails.SpendingHeight = bestHeight + 1
-			}
+			spendDetails.SpendingHeight = tx.Block.Height
 
 			for _, ntfn := range clients {
-				chainntnfs.Log.Infof("Dispatching "+
-					"spend notification for "+
-					"outpoint=%v", ntfn.targetOutpoint)
+				chainntnfs.Log.Infof("Dispatching confirmed "+
+					"spend notification for outpoint=%v "+
+					"at height %v", ntfn.targetOutpoint,
+					spendDetails.SpendingHeight)
 				ntfn.spendChan <- spendDetails
 
-				// Close spendChan to ensure that any calls to Cancel will not
-				// block. This is safe to do since the channel is buffered, and the
+				// Close spendChan to ensure that any calls to
+				// Cancel will not block. This is safe to do
+				// since the channel is buffered, and the
 				// message can still be read by the receiver.
 				close(ntfn.spendChan)
 			}
@@ -548,7 +551,7 @@ type spendCancel struct {
 // across the 'Spend' channel. The heightHint should represent the earliest
 // height in the chain where the transaction could have been spent in.
 func (b *BitcoindNotifier) RegisterSpendNtfn(outpoint *wire.OutPoint,
-	heightHint uint32, _ bool) (*chainntnfs.SpendEvent, error) {
+	heightHint uint32) (*chainntnfs.SpendEvent, error) {
 
 	ntfn := &spendNotification{
 		targetOutpoint: outpoint,

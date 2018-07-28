@@ -8,14 +8,14 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/btcsuite/btcd/blockchain"
+	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/lnwallet"
-	"github.com/roasbeef/btcd/blockchain"
-	"github.com/roasbeef/btcd/txscript"
-	"github.com/roasbeef/btcd/wire"
-	"github.com/roasbeef/btcutil"
 )
 
 //                          SUMMARY OF OUTPUT STATES
@@ -962,7 +962,7 @@ func (u *utxoNursery) createSweepTx(kgtnOutputs []kidOutput,
 		// sweep.
 		case lnwallet.HtlcOfferedTimeoutSecondLevel:
 			weightEstimate.AddWitnessInput(
-				lnwallet.SecondLevelHtlcSuccessWitnessSize,
+				lnwallet.ToLocalTimeoutWitnessSize,
 			)
 			csvOutputs = append(csvOutputs, input)
 
@@ -971,7 +971,7 @@ func (u *utxoNursery) createSweepTx(kgtnOutputs []kidOutput,
 		// sweep.
 		case lnwallet.HtlcAcceptedSuccessSecondLevel:
 			weightEstimate.AddWitnessInput(
-				lnwallet.SecondLevelHtlcSuccessWitnessSize,
+				lnwallet.ToLocalTimeoutWitnessSize,
 			)
 			csvOutputs = append(csvOutputs, input)
 

@@ -4,7 +4,7 @@ import (
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/keychain"
-	"github.com/roasbeef/btcd/chaincfg"
+	"github.com/btcsuite/btcd/chaincfg"
 )
 
 // Config is a struct which houses configuration parameters which modify the

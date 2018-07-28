@@ -10,7 +10,7 @@
     "ghash",
     "internal/modes"
   ]
-  revision = "e06297f34865a50b8e473105e52cb64ad1b55da8"
+  revision = "c0276d75487ef7aceab140c9eb31601dd7d18bd4"
 
 [[projects]]
   branch = "master"
@@ -43,7 +43,7 @@
     ".",
     "chacha"
   ]
-  revision = "e2538746bfea853aaa589feb8ec46bd46ee78f86"
+  revision = "8b13a72661dae6e9e5dea04f344f0dc95ea29547"
 
 [[projects]]
   branch = "master"
@@ -78,9 +78,62 @@
   revision = "bae9ad2043bb55facb14c4918e909f88a7d3ed84"
 
 [[projects]]
+  name = "github.com/btcsuite/btcd"
+  packages = [
+    "addrmgr",
+    "blockchain",
+    "btcec",
+    "btcjson",
+    "chaincfg",
+    "chaincfg/chainhash",
+    "connmgr",
+    "database",
+    "integration/rpctest",
+    "peer",
+    "rpcclient",
+    "txscript",
+    "wire"
+  ]
+  revision = "86fed781132ac890ee03e906e4ecd5d6fa180c64"
+
+[[projects]]
   name = "github.com/btcsuite/btclog"
   packages = ["."]
   revision = "84c8d2346e9fc8c7b947e243b9c24e6df9fd206a"
+
+[[projects]]
+  name = "github.com/btcsuite/btcutil"
+  packages = [
+    ".",
+    "base58",
+    "bech32",
+    "gcs",
+    "gcs/builder",
+    "hdkeychain",
+    "txsort"
+  ]
+  revision = "d4cc87b860166d00d6b5b9e0d3b3d71d6088d4d4"
+
+[[projects]]
+  name = "github.com/btcsuite/btcwallet"
+  packages = [
+    "chain",
+    "internal/helpers",
+    "internal/legacy/keystore",
+    "internal/legacy/rename",
+    "internal/prompt",
+    "internal/zero",
+    "snacl",
+    "waddrmgr",
+    "wallet",
+    "wallet/internal/txsizes",
+    "wallet/txauthor",
+    "wallet/txrules",
+    "walletdb",
+    "walletdb/bdb",
+    "wtxmgr"
+  ]
+  revision = "64b5b448f5e6853a2d870f388504a7807bc951f1"
 
 [[projects]]
   branch = "master"
@@ -200,7 +253,7 @@
     "filterdb",
     "headerfs"
   ]
-  revision = "36d9a509ff4ea1e916a73c6f1c2b784c1faf11ed"
+  revision = "03f4c660ea0d1586331f32561185d45eab1ba4c9"
 
 [[projects]]
   name = "github.com/miekg/dns"
@@ -211,57 +264,25 @@
   revision = "79bfde677fa81ff8d27c4330c35bda075d360641"
 
 [[projects]]
+  branch = "master"
   name = "github.com/roasbeef/btcd"
   packages = [
-    "addrmgr",
-    "blockchain",
     "btcec",
-    "btcjson",
     "chaincfg",
     "chaincfg/chainhash",
-    "connmgr",
-    "database",
-    "integration/rpctest",
-    "peer",
-    "rpcclient",
-    "txscript",
     "wire"
   ]
   revision = "a03db407e40d3b66ea29984263bbc8bf4d2f04c4"
 
 [[projects]]
+  branch = "master"
   name = "github.com/roasbeef/btcutil"
   packages = [
     ".",
     "base58",
-    "bech32",
-    "gcs",
-    "gcs/builder",
-    "hdkeychain",
-    "txsort"
+    "bech32"
   ]
   revision = "dfb640c57141f1c2113b92b4b16d2a89c30dd258"
-
-[[projects]]
-  name = "github.com/roasbeef/btcwallet"
-  packages = [
-    "chain",
-    "internal/helpers",
-    "internal/legacy/keystore",
-    "internal/legacy/rename",
-    "internal/prompt",
-    "internal/zero",
-    "snacl",
-    "waddrmgr",
-    "wallet",
-    "wallet/internal/txsizes",
-    "wallet/txauthor",
-    "wallet/txrules",
-    "walletdb",
-    "walletdb/bdb",
-    "wtxmgr"
-  ]
-  revision = "ccd48bb4720f2baeaa795cac81264f6ced2da4c7"
 
 [[projects]]
   branch = "master"
@@ -345,7 +366,7 @@
     "unix",
     "windows"
   ]
-  revision = "3c6ecd8f22c6f40fbeec94c000a069d7d87c7624"
+  revision = "56ede360ec1c541828fb88741b3f1049406d28f5"
 
 [[projects]]
   name = "golang.org/x/text"
@@ -432,6 +453,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "7bf07dda477e395dff2590bcf422bd62b77155869a481270de4f0ad11c4745d4"
+  inputs-digest = "d3cc0931370cf6514aef4b428218a0929d9c6384e7a3f8005e9afb29ccd670b6"
   solver-name = "gps-cdcl"
   solver-version = 1

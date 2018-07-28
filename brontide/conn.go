@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/roasbeef/btcd/btcec"
+	"github.com/btcsuite/btcd/btcec"
 )
 
 // Conn is an implementation of net.Conn which enforces an authenticated key
