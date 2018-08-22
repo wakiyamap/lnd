@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/wakiyamap/lnd/routing"
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
+	"github.com/wakiyamap/lnd/lnwire"
+	"github.com/wakiyamap/lnd/routing"
 
 	monacoinCfg "github.com/wakiyamap/monad/chaincfg"
 )

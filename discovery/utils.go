@@ -1,11 +1,11 @@
 package discovery
 
 import (
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/go-errors/errors"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/btcsuite/btcd/btcec"
 )
 
 // CreateChanAnnouncement is a helper function which creates all channel

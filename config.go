@@ -19,10 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcutil"
 	flags "github.com/jessevdk/go-flags"
-	"github.com/wakiyamap/lnd/brontide"
 	"github.com/wakiyamap/lnd/htlcswitch/hodl"
 	"github.com/wakiyamap/lnd/lncfg"
 	"github.com/wakiyamap/lnd/lnwire"
@@ -30,27 +28,28 @@ import (
 )
 
 const (
-	defaultConfigFilename     = "lnd.conf"
-	defaultDataDirname        = "data"
-	defaultChainSubDirname    = "chain"
-	defaultGraphSubDirname    = "graph"
-	defaultTLSCertFilename    = "tls.cert"
-	defaultTLSKeyFilename     = "tls.key"
-	defaultAdminMacFilename   = "admin.macaroon"
-	defaultReadMacFilename    = "readonly.macaroon"
-	defaultInvoiceMacFilename = "invoice.macaroon"
-	defaultLogLevel           = "info"
-	defaultLogDirname         = "logs"
-	defaultLogFilename        = "lnd.log"
-	defaultRPCPort            = 10009
-	defaultRESTPort           = 8080
-	defaultPeerPort           = 9735
-	defaultRPCHost            = "localhost"
-	defaultMaxPendingChannels = 1
-	defaultNoEncryptWallet    = false
-	defaultTrickleDelay       = 30 * 1000
-	defaultMaxLogFiles        = 3
-	defaultMaxLogFileSize     = 10
+	defaultConfigFilename      = "lnd.conf"
+	defaultDataDirname         = "data"
+	defaultChainSubDirname     = "chain"
+	defaultGraphSubDirname     = "graph"
+	defaultTLSCertFilename     = "tls.cert"
+	defaultTLSKeyFilename      = "tls.key"
+	defaultAdminMacFilename    = "admin.macaroon"
+	defaultReadMacFilename     = "readonly.macaroon"
+	defaultInvoiceMacFilename  = "invoice.macaroon"
+	defaultLogLevel            = "info"
+	defaultLogDirname          = "logs"
+	defaultLogFilename         = "lnd.log"
+	defaultRPCPort             = 10009
+	defaultRESTPort            = 8080
+	defaultPeerPort            = 9735
+	defaultRPCHost             = "localhost"
+	defaultMaxPendingChannels  = 1
+	defaultNoEncryptWallet     = false
+	defaultTrickleDelay        = 30 * 1000
+	defaultInactiveChanTimeout = 20 * time.Minute
+	defaultMaxLogFiles         = 3
+	defaultMaxLogFileSize      = 10
 
 	defaultTorSOCKSPort            = 9050
 	defaultTorDNSHost              = "soa.nodes.lightning.directory"
@@ -133,11 +132,12 @@ type btcdConfig struct {
 }
 
 type bitcoindConfig struct {
-	Dir     string `long:"dir" description:"The base directory that contains the node's data, logs, configuration file, etc."`
-	RPCHost string `long:"rpchost" description:"The daemon's rpc listening address. If a port is omitted, then the default port for the selected chain parameters will be used."`
-	RPCUser string `long:"rpcuser" description:"Username for RPC connections"`
-	RPCPass string `long:"rpcpass" default-mask:"-" description:"Password for RPC connections"`
-	ZMQPath string `long:"zmqpath" description:"The path to the ZMQ socket providing at least raw blocks. Raw transactions can be handled as well."`
+	Dir            string `long:"dir" description:"The base directory that contains the node's data, logs, configuration file, etc."`
+	RPCHost        string `long:"rpchost" description:"The daemon's rpc listening address. If a port is omitted, then the default port for the selected chain parameters will be used."`
+	RPCUser        string `long:"rpcuser" description:"Username for RPC connections"`
+	RPCPass        string `long:"rpcpass" default-mask:"-" description:"Password for RPC connections"`
+	ZMQPubRawBlock string `long:"zmqpubrawblock" description:"The address listening for ZMQ connections to deliver raw block notifications"`
+	ZMQPubRawTx    string `long:"zmqpubrawtx" description:"The address listening for ZMQ connections to deliver raw transaction notifications"`
 }
 
 type autoPilotConfig struct {
@@ -146,6 +146,8 @@ type autoPilotConfig struct {
 	Allocation     float64 `long:"allocation" description:"The percentage of total funds that should be committed to automatic channel establishment"`
 	MinChannelSize int64   `long:"minchansize" description:"The smallest channel that the autopilot agent should create"`
 	MaxChannelSize int64   `long:"maxchansize" description:"The largest channel that the autopilot agent should create"`
+	Private        bool    `long:"private" description:"Whether the channels created by the autopilot agent should be private or not. Private channels won't be announced to the network."`
+	MinConfs       int32   `long:"minconfs" description:"The minimum number of confirmations each of your inputs in funding transactions created by the autopilot agent must have."`
 }
 
 type torConfig struct {
@@ -226,7 +228,8 @@ type config struct {
 
 	NoEncryptWallet bool `long:"noencryptwallet" description:"If set, wallet will be encrypted using the default passphrase."`
 
-	TrickleDelay int `long:"trickledelay" description:"Time in milliseconds between each release of announcements to the network"`
+	TrickleDelay        int           `long:"trickledelay" description:"Time in milliseconds between each release of announcements to the network"`
+	InactiveChanTimeout time.Duration `long:"inactivechantimeout" description:"If a channel has been inactive for the set time, send a ChannelUpdate disabling it."`
 
 	Alias       string `long:"alias" description:"The node alias. Used as a moniker by peers and intelligence services"`
 	Color       string `long:"color" description:"The color of the node in hex format (i.e. '#3399FF'). Used to customize node appearance in intelligence services"`
@@ -299,10 +302,11 @@ func loadConfig() (*config, error) {
 			MinChannelSize: int64(minChanFundingSize),
 			MaxChannelSize: int64(maxFundingAmount),
 		},
-		TrickleDelay: defaultTrickleDelay,
-		Alias:        defaultAlias,
-		Color:        defaultColor,
-		MinChanSize:  int64(minChanFundingSize),
+		TrickleDelay:        defaultTrickleDelay,
+		InactiveChanTimeout: defaultInactiveChanTimeout,
+		Alias:               defaultAlias,
+		Color:               defaultColor,
+		MinChanSize:         int64(minChanFundingSize),
 		Tor: &torConfig{
 			SOCKS:            defaultTorSOCKS,
 			DNS:              defaultTorDNS,
@@ -420,6 +424,12 @@ func loadConfig() (*config, error) {
 	}
 	if cfg.Autopilot.MaxChannelSize < 0 {
 		str := "%s: autopilot.maxchansize must be non-negative"
+		err := fmt.Errorf(str, funcName)
+		fmt.Fprintln(os.Stderr, err)
+		return nil, err
+	}
+	if cfg.Autopilot.MinConfs < 0 {
+		str := "%s: autopilot.minconfs must be non-negative"
 		err := fmt.Errorf(str, funcName)
 		fmt.Fprintln(os.Stderr, err)
 		return nil, err
@@ -1028,15 +1038,6 @@ func supportedSubsystems() []string {
 	return subsystems
 }
 
-// noiseDial is a factory function which creates a connmgr compliant dialing
-// function by returning a closure which includes the server's identity key.
-func noiseDial(idPriv *btcec.PrivateKey) func(net.Addr) (net.Conn, error) {
-	return func(a net.Addr) (net.Conn, error) {
-		lnAddr := a.(*lnwire.NetAddress)
-		return brontide.Dial(idPriv, lnAddr, cfg.net.Dial)
-	}
-}
-
 func parseRPCParams(cConfig *chainConfig, nodeConfig interface{}, net chainCode,
 	funcName string) error {
 
@@ -1056,8 +1057,12 @@ func parseRPCParams(cConfig *chainConfig, nodeConfig interface{}, net chainCode,
 		switch net {
 		case bitcoinChain:
 			daemonName = "btcd"
+			confDir = conf.Dir
+			confFile = "btcd"
 		case monacoinChain:
 			daemonName = "monad"
+			confDir = conf.Dir
+			confFile = "monad"
 		}
 
 		// If only ONE of RPCUser or RPCPass is set, we assume the
@@ -1067,18 +1072,11 @@ func parseRPCParams(cConfig *chainConfig, nodeConfig interface{}, net chainCode,
 				"%[1]v.rpcuser, %[1]v.rpcpass", daemonName)
 		}
 
-		switch net {
-		case bitcoinChain:
-			confDir = conf.Dir
-			confFile = "btcd"
-		case monacoinChain:
-			confDir = conf.Dir
-			confFile = "monad"
-		}
 	case *bitcoindConfig:
-		// If all of RPCUser, RPCPass, and ZMQPath are set, we assume
-		// those parameters are good to use.
-		if conf.RPCUser != "" && conf.RPCPass != "" && conf.ZMQPath != "" {
+		// If all of RPCUser, RPCPass, ZMQBlockHost, and ZMQTxHost are
+		// set, we assume those parameters are good to use.
+		if conf.RPCUser != "" && conf.RPCPass != "" &&
+			conf.ZMQPubRawBlock != "" && conf.ZMQPubRawTx != "" {
 			return nil
 		}
 
@@ -1086,24 +1084,23 @@ func parseRPCParams(cConfig *chainConfig, nodeConfig interface{}, net chainCode,
 		switch net {
 		case bitcoinChain:
 			daemonName = "bitcoind"
-		case monacoinChain:
-			daemonName = "monacoind"
-		}
-		// If only one or two of the parameters are set, we assume the
-		// user did that unintentionally.
-		if conf.RPCUser != "" || conf.RPCPass != "" || conf.ZMQPath != "" {
-			return fmt.Errorf("please set all or none of "+
-				"%[1]v.rpcuser, %[1]v.rpcpass, "+
-				"and %[1]v.zmqpath", daemonName)
-		}
-
-		switch net {
-		case bitcoinChain:
 			confDir = conf.Dir
 			confFile = "bitcoin"
 		case monacoinChain:
+			daemonName = "monacoind"
 			confDir = conf.Dir
 			confFile = "monacoin"
+		}
+
+		// If only one or two of the parameters are set, we assume the
+		// user did that unintentionally.
+		if conf.RPCUser != "" || conf.RPCPass != "" ||
+			conf.ZMQPubRawBlock != "" || conf.ZMQPubRawTx != "" {
+
+			return fmt.Errorf("please set all or none of "+
+				"%[1]v.rpcuser, %[1]v.rpcpass, "+
+				"%[1]v.zmqpubrawblock, %[1]v.zmqpubrawtx",
+				daemonName)
 		}
 	}
 
@@ -1131,13 +1128,15 @@ func parseRPCParams(cConfig *chainConfig, nodeConfig interface{}, net chainCode,
 		nConf.RPCUser, nConf.RPCPass = rpcUser, rpcPass
 	case "bitcoind", "monacoind":
 		nConf := nodeConfig.(*bitcoindConfig)
-		rpcUser, rpcPass, zmqPath, err := extractBitcoindRPCParams(confFile)
+		rpcUser, rpcPass, zmqBlockHost, zmqTxHost, err :=
+			extractBitcoindRPCParams(confFile)
 		if err != nil {
 			return fmt.Errorf("unable to extract RPC credentials:"+
 				" %v, cannot start w/o RPC connection",
 				err)
 		}
-		nConf.RPCUser, nConf.RPCPass, nConf.ZMQPath = rpcUser, rpcPass, zmqPath
+		nConf.RPCUser, nConf.RPCPass = rpcUser, rpcPass
+		nConf.ZMQPubRawBlock, nConf.ZMQPubRawTx = zmqBlockHost, zmqTxHost
 	}
 
 	fmt.Printf("Automatically obtained %v's RPC credentials\n", daemonName)
@@ -1195,13 +1194,12 @@ func extractBtcdRPCParams(btcdConfigPath string) (string, string, error) {
 // location of bitcoind's bitcoin.conf on the target system. The routine looks
 // for a cookie first, optionally following the datadir configuration option in
 // the bitcoin.conf. If it doesn't find one, it looks for rpcuser/rpcpassword.
-func extractBitcoindRPCParams(bitcoindConfigPath string) (string, string, string, error) {
-
+func extractBitcoindRPCParams(bitcoindConfigPath string) (string, string, string, string, error) {
 	// First, we'll open up the bitcoind configuration file found at the
 	// target destination.
 	bitcoindConfigFile, err := os.Open(bitcoindConfigPath)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	defer bitcoindConfigFile.Close()
 
@@ -1209,18 +1207,36 @@ func extractBitcoindRPCParams(bitcoindConfigPath string) (string, string, string
 	// we can attempt to locate the RPC credentials.
 	configContents, err := ioutil.ReadAll(bitcoindConfigFile)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 
-	// First, we look for the ZMQ path for raw blocks. If raw transactions
-	// are sent over this interface, we can also get unconfirmed txs.
-	zmqPathRE, err := regexp.Compile(`(?m)^\s*zmqpubrawblock\s*=\s*([^\s]+)`)
+	// First, we'll look for the ZMQ hosts providing raw block and raw
+	// transaction notifications.
+	zmqBlockHostRE, err := regexp.Compile(
+		`(?m)^\s*zmqpubrawblock\s*=\s*([^\s]+)`,
+	)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
-	zmqPathSubmatches := zmqPathRE.FindSubmatch(configContents)
-	if len(zmqPathSubmatches) < 2 {
-		return "", "", "", fmt.Errorf("unable to find zmqpubrawblock in config")
+	zmqBlockHostSubmatches := zmqBlockHostRE.FindSubmatch(configContents)
+	if len(zmqBlockHostSubmatches) < 2 {
+		return "", "", "", "", fmt.Errorf("unable to find " +
+			"zmqpubrawblock in config")
+	}
+	zmqTxHostRE, err := regexp.Compile(`(?m)^\s*zmqpubrawtx\s*=\s*([^\s]+)`)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	zmqTxHostSubmatches := zmqTxHostRE.FindSubmatch(configContents)
+	if len(zmqTxHostSubmatches) < 2 {
+		return "", "", "", "", errors.New("unable to find zmqpubrawtx " +
+			"in config")
+	}
+	zmqBlockHost := string(zmqBlockHostSubmatches[1])
+	zmqTxHost := string(zmqTxHostSubmatches[1])
+	if zmqBlockHost == zmqTxHost {
+		return "", "", "", "", errors.New("zmqpubrawblock and " +
+			"zmqpubrawtx must be different")
 	}
 
 	// Next, we'll try to find an auth cookie. We need to detect the chain
@@ -1228,7 +1244,7 @@ func extractBitcoindRPCParams(bitcoindConfigPath string) (string, string, string
 	dataDir := path.Dir(bitcoindConfigPath)
 	dataDirRE, err := regexp.Compile(`(?m)^\s*datadir\s*=\s*([^\s]+)`)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	dataDirSubmatches := dataDirRE.FindSubmatch(configContents)
 	if dataDirSubmatches != nil {
@@ -1249,8 +1265,8 @@ func extractBitcoindRPCParams(bitcoindConfigPath string) (string, string, string
 	if err == nil {
 		splitCookie := strings.Split(string(cookie), ":")
 		if len(splitCookie) == 2 {
-			return splitCookie[0], splitCookie[1],
-				string(zmqPathSubmatches[1]), nil
+			return splitCookie[0], splitCookie[1], zmqBlockHost,
+				zmqTxHost, nil
 		}
 	}
 
@@ -1259,11 +1275,12 @@ func extractBitcoindRPCParams(bitcoindConfigPath string) (string, string, string
 	// expression then we'll exit with an error.
 	rpcUserRegexp, err := regexp.Compile(`(?m)^\s*rpcuser\s*=\s*([^\s]+)`)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	userSubmatches := rpcUserRegexp.FindSubmatch(configContents)
 	if userSubmatches == nil {
-		return "", "", "", fmt.Errorf("unable to find rpcuser in config")
+		return "", "", "", "", fmt.Errorf("unable to find rpcuser in " +
+			"config")
 	}
 
 	// Similarly, we'll use another regular expression to find the set
@@ -1271,15 +1288,16 @@ func extractBitcoindRPCParams(bitcoindConfigPath string) (string, string, string
 	// error.
 	rpcPassRegexp, err := regexp.Compile(`(?m)^\s*rpcpassword\s*=\s*([^\s]+)`)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	passSubmatches := rpcPassRegexp.FindSubmatch(configContents)
 	if passSubmatches == nil {
-		return "", "", "", fmt.Errorf("unable to find rpcpassword in config")
+		return "", "", "", "", fmt.Errorf("unable to find rpcpassword " +
+			"in config")
 	}
 
 	return string(userSubmatches[1]), string(passSubmatches[1]),
-		string(zmqPathSubmatches[1]), nil
+		zmqBlockHost, zmqTxHost, nil
 }
 
 // normalizeNetwork returns the common name of a network type used to create

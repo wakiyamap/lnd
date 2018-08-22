@@ -1,8 +1,4 @@
 [[constraint]]
-  name = "github.com/awalterschulze/gographviz"
-  revision = "761fd5fbb34e4c2c138c280395b65b48e4ff5a53"
-
-[[constraint]]
   name = "github.com/btcsuite/btclog"
   revision = "84c8d2346e9fc8c7b947e243b9c24e6df9fd206a"
 
@@ -44,7 +40,7 @@
 
 [[constraint]]
   name = "github.com/lightninglabs/neutrino"
-  revision = "03f4c660ea0d1586331f32561185d45eab1ba4c9"
+  revision = "0d0ce901538af81e234c1b2376babf20fe976b09"
 
 [[constraint]]
   name = "github.com/wakiyamap/lightning-onion"
@@ -64,15 +60,15 @@
 
 [[constraint]]
   name = "github.com/btcsuite/btcutil"
-  revision = "d4cc87b860166d00d6b5b9e0d3b3d71d6088d4d4"
+  revision = "ab6388e0c60ae4834a1f57511e20c17b5f78be4b"
 
 [[constraint]]
   name = "github.com/btcsuite/btcd"
-  revision = "86fed781132ac890ee03e906e4ecd5d6fa180c64"
+  revision = "f899737d7f2764dc13e4d01ff00108ec58f766a9"
 
 [[constraint]]
   name = "github.com/btcsuite/btcwallet"
-  revision = "64b5b448f5e6853a2d870f388504a7807bc951f1"
+  revision = "5fb94231d0c814f02ffc3110eee588278151b4e1"
 
 [[constraint]]
   name = "github.com/tv42/zbase32"

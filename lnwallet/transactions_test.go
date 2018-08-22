@@ -6,16 +6,16 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/davecgh/go-spew/spew"
-	"github.com/wakiyamap/lnd/channeldb"
-	"github.com/wakiyamap/lnd/keychain"
-	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/wakiyamap/lnd/shachain"
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
+	"github.com/davecgh/go-spew/spew"
+	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/keychain"
+	"github.com/wakiyamap/lnd/lnwire"
+	"github.com/wakiyamap/lnd/shachain"
 )
 
 /**

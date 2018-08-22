@@ -13,6 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/fastsha256"
 	"github.com/go-errors/errors"
 	"github.com/wakiyamap/lightning-onion"
@@ -22,10 +26,7 @@ import (
 	"github.com/wakiyamap/lnd/lnpeer"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/btcsuite/btcd/btcec"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/txscript"
-	"github.com/btcsuite/btcd/wire"
+	"github.com/wakiyamap/lnd/ticker"
 )
 
 type mockPreimageCache struct {
@@ -58,12 +59,14 @@ func (m *mockPreimageCache) SubscribeUpdates() *contractcourt.WitnessSubscriptio
 }
 
 type mockFeeEstimator struct {
-	byteFeeIn chan lnwallet.SatPerVByte
+	byteFeeIn chan lnwallet.SatPerKWeight
 
 	quit chan struct{}
 }
 
-func (m *mockFeeEstimator) EstimateFeePerVSize(numBlocks uint32) (lnwallet.SatPerVByte, error) {
+func (m *mockFeeEstimator) EstimateFeePerKW(
+	numBlocks uint32) (lnwallet.SatPerKWeight, error) {
+
 	select {
 	case feeRate := <-m.byteFeeIn:
 		return feeRate, nil
@@ -143,7 +146,9 @@ func initSwitchWithDB(startingHeight uint32, db *channeldb.DB) (*Switch, error) 
 		FetchLastChannelUpdate: func(lnwire.ShortChannelID) (*lnwire.ChannelUpdate, error) {
 			return nil, nil
 		},
-		Notifier: &mockNotifier{},
+		Notifier:       &mockNotifier{},
+		FwdEventTicker: ticker.MockNew(DefaultFwdEventInterval),
+		LogEventTicker: ticker.MockNew(DefaultLogInterval),
 	}
 
 	return New(cfg, startingHeight)
@@ -495,11 +500,12 @@ func (s *mockServer) readHandler(message lnwire.Message) error {
 		return fmt.Errorf("unknown message type: %T", msg)
 	}
 
-	// Dispatch the commitment update message to the proper
-	// channel link dedicated to this channel.
+	// Dispatch the commitment update message to the proper channel link
+	// dedicated to this channel. If the link is not found, we will discard
+	// the message.
 	link, err := s.htlcSwitch.GetLink(targetChan)
 	if err != nil {
-		return err
+		return nil
 	}
 
 	// Create goroutine for this, in order to be able to properly stop
@@ -781,11 +787,12 @@ type mockNotifier struct {
 	epochChan chan *chainntnfs.BlockEpoch
 }
 
-func (m *mockNotifier) RegisterConfirmationsNtfn(txid *chainhash.Hash,
+func (m *mockNotifier) RegisterConfirmationsNtfn(txid *chainhash.Hash, _ []byte,
 	numConfs uint32, heightHint uint32) (*chainntnfs.ConfirmationEvent, error) {
 	return nil, nil
 }
-func (m *mockNotifier) RegisterBlockEpochNtfn() (*chainntnfs.BlockEpochEvent, error) {
+func (m *mockNotifier) RegisterBlockEpochNtfn(
+	bestBlock *chainntnfs.BlockEpoch) (*chainntnfs.BlockEpochEvent, error) {
 	return &chainntnfs.BlockEpochEvent{
 		Epochs: m.epochChan,
 		Cancel: func() {},
@@ -800,21 +807,10 @@ func (m *mockNotifier) Stop() error {
 	return nil
 }
 
-func (m *mockNotifier) RegisterSpendNtfn(outpoint *wire.OutPoint,
+func (m *mockNotifier) RegisterSpendNtfn(outpoint *wire.OutPoint, _ []byte,
 	heightHint uint32) (*chainntnfs.SpendEvent, error) {
 
 	return &chainntnfs.SpendEvent{
 		Spend: make(chan *chainntnfs.SpendDetail),
 	}, nil
-}
-
-type mockTicker struct {
-	ticker <-chan time.Time
-}
-
-func (m *mockTicker) Start() <-chan time.Time {
-	return m.ticker
-}
-
-func (m *mockTicker) Stop() {
 }

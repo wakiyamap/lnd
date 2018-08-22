@@ -5,10 +5,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/coreos/bbolt"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/btcsuite/btcd/btcec"
 )
 
 const (
@@ -375,7 +375,7 @@ func (p *paymentSession) RequestRoute(payment *LightningPayment,
 	path, err := findPath(
 		nil, p.mc.graph, p.additionalEdges, p.mc.selfNode,
 		payment.Target, pruneView.vertexes, pruneView.edges,
-		payment.Amount, p.bandwidthHints,
+		payment.Amount, payment.FeeLimit, p.bandwidthHints,
 	)
 	if err != nil {
 		return nil, err

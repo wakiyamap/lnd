@@ -20,13 +20,13 @@ import (
 	"google.golang.org/grpc/credentials"
 	macaroon "gopkg.in/macaroon.v2"
 
-	"github.com/go-errors/errors"
-	"github.com/wakiyamap/lnd/lnrpc"
-	"github.com/wakiyamap/lnd/macaroons"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/rpcclient"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/go-errors/errors"
+	"github.com/wakiyamap/lnd/lnrpc"
+	"github.com/wakiyamap/lnd/macaroons"
 )
 
 var (
@@ -302,8 +302,10 @@ func (hn *HarnessNode) start(lndError chan<- error) error {
 						hex.EncodeToString(hn.PubKey[:logPubKeyBytes]))
 					err := os.Rename(fileName, newFileName)
 					if err != nil {
-						fmt.Errorf("could not rename %s to %s: %v",
-							fileName, newFileName, err)
+						fmt.Printf("could not rename "+
+							"%s to %s: %v\n",
+							fileName, newFileName,
+							err)
 					}
 				}
 			}
@@ -481,7 +483,7 @@ func (hn *HarnessNode) writePidFile() error {
 	return nil
 }
 
-// connectRPC uses the TLS certificate and admin macaroon files written by the
+// ConnectRPC uses the TLS certificate and admin macaroon files written by the
 // lnd node to create a gRPC client connection.
 func (hn *HarnessNode) ConnectRPC(useMacs bool) (*grpc.ClientConn, error) {
 	// Wait until TLS certificate and admin macaroon are created before
@@ -891,6 +893,33 @@ func (hn *HarnessNode) WaitForBlockchainSync(ctx context.Context) error {
 	case <-ctx.Done():
 		return fmt.Errorf("Timeout while waiting for blockchain sync")
 	}
+}
+
+// WaitForBalance waits until the node sees the expected confirmed/unconfirmed
+// balance within their wallet.
+func (hn *HarnessNode) WaitForBalance(expectedBalance int64, confirmed bool) error {
+	ctx := context.Background()
+	req := &lnrpc.WalletBalanceRequest{}
+
+	doesBalanceMatch := func() bool {
+		balance, err := hn.WalletBalance(ctx, req)
+		if err != nil {
+			return false
+		}
+
+		if confirmed {
+			return balance.ConfirmedBalance == expectedBalance
+		}
+
+		return balance.UnconfirmedBalance == expectedBalance
+	}
+
+	err := WaitPredicate(doesBalanceMatch, 30*time.Second)
+	if err != nil {
+		return errors.New("balances not synced after deadline")
+	}
+
+	return nil
 }
 
 // fileExists reports whether the named file or directory exists.

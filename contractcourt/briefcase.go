@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/wire"
 	"github.com/coreos/bbolt"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/lnwallet"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/wire"
-)
 
+)
 // ContractResolutions is a wrapper struct around the two forms of resolutions
 // we may need to carry out once a contract is closing: resolving the
 // commitment output, and resolving any incoming+outgoing HTLC's still present

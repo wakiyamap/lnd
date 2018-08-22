@@ -59,6 +59,14 @@ var (
 			number:    3,
 			migration: migrateInvoiceTimeSeriesOutgoingPayments,
 		},
+		{
+			// The version of the database where every channel
+			// always has two entries in the edges bucket. If
+			// a policy is unknown, this will be represented
+			// by a special byte sequence.
+			number:    4,
+			migration: migrateEdgePolicies,
+		},
 	}
 
 	// Big endian is the preferred byte order, due to cursor scans over
@@ -295,7 +303,7 @@ func (d *DB) fetchOpenChannels(tx *bolt.Tx,
 				chainHash[:], pub, err)
 		}
 
-		channels = nodeChannels
+		channels = append(channels, nodeChannels...)
 		return nil
 	})
 
@@ -456,7 +464,7 @@ func fetchChannels(d *DB, pending, waitingClose bool) ([]*OpenChannel, error) {
 					// than Default, then it means it is
 					// waiting to be closed.
 					channelWaitingClose :=
-						channel.ChanStatus != Default
+						channel.ChanStatus() != Default
 
 					// Only include it if we requested
 					// channels with the same waitingClose
@@ -613,8 +621,8 @@ func (d *DB) MarkChanFullyClosed(chanPoint *wire.OutPoint) error {
 // pruneLinkNode determines whether we should garbage collect a link node from
 // the database due to no longer having any open channels with it. If there are
 // any left, then this acts as a no-op.
-func (db *DB) pruneLinkNode(tx *bolt.Tx, remotePub *btcec.PublicKey) error {
-	openChannels, err := db.fetchOpenChannels(tx, remotePub)
+func (d *DB) pruneLinkNode(tx *bolt.Tx, remotePub *btcec.PublicKey) error {
+	openChannels, err := d.fetchOpenChannels(tx, remotePub)
 	if err != nil {
 		return fmt.Errorf("unable to fetch open channels for peer %x: "+
 			"%v", remotePub.SerializeCompressed(), err)
@@ -627,20 +635,20 @@ func (db *DB) pruneLinkNode(tx *bolt.Tx, remotePub *btcec.PublicKey) error {
 	log.Infof("Pruning link node %x with zero open channels from database",
 		remotePub.SerializeCompressed())
 
-	return db.deleteLinkNode(tx, remotePub)
+	return d.deleteLinkNode(tx, remotePub)
 }
 
 // PruneLinkNodes attempts to prune all link nodes found within the databse with
 // whom we no longer have any open channels with.
-func (db *DB) PruneLinkNodes() error {
-	return db.Update(func(tx *bolt.Tx) error {
-		linkNodes, err := db.fetchAllLinkNodes(tx)
+func (d *DB) PruneLinkNodes() error {
+	return d.Update(func(tx *bolt.Tx) error {
+		linkNodes, err := d.fetchAllLinkNodes(tx)
 		if err != nil {
 			return err
 		}
 
 		for _, linkNode := range linkNodes {
-			err := db.pruneLinkNode(tx, linkNode.IdentityPub)
+			err := d.pruneLinkNode(tx, linkNode.IdentityPub)
 			if err != nil {
 				return err
 			}
@@ -663,12 +671,24 @@ func (d *DB) syncVersions(versions []version) error {
 		}
 	}
 
-	// If the current database version matches the latest version number,
-	// then we don't need to perform any migrations.
 	latestVersion := getLatestDBVersion(versions)
 	log.Infof("Checking for schema update: latest_version=%v, "+
 		"db_version=%v", latestVersion, meta.DbVersionNumber)
-	if meta.DbVersionNumber == latestVersion {
+
+	switch {
+
+	// If the database reports a higher version that we are aware of, the
+	// user is probably trying to revert to a prior version of lnd. We fail
+	// here to prevent reversions and unintended corruption.
+	case meta.DbVersionNumber > latestVersion:
+		log.Errorf("Refusing to revert from db_version=%d to "+
+			"lower version=%d", meta.DbVersionNumber,
+			latestVersion)
+		return ErrDBReversion
+
+	// If the current database version matches the latest version number,
+	// then we don't need to perform any migrations.
+	case meta.DbVersionNumber == latestVersion:
 		return nil
 	}
 

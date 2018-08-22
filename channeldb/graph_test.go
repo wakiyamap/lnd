@@ -350,6 +350,15 @@ func TestEdgeInsertionDeletion(t *testing.T) {
 		t.Fatalf("unable to create channel edge: %v", err)
 	}
 
+	// Ensure that both policies are returned as unknown (nil).
+	_, e1, e2, err := graph.FetchChannelEdgesByID(chanID)
+	if err != nil {
+		t.Fatalf("unable to fetch channel edge")
+	}
+	if e1 != nil || e2 != nil {
+		t.Fatalf("channel edges not unknown")
+	}
+
 	// Next, attempt to delete the edge from the database, again this
 	// should proceed without any issues.
 	if err := graph.DeleteChannelEdge(&outpoint); err != nil {
@@ -918,6 +927,12 @@ func TestGraphTraversal(t *testing.T) {
 	err = firstNode.ForEachChannel(nil, func(_ *bolt.Tx, _ *ChannelEdgeInfo,
 		outEdge, inEdge *ChannelEdgePolicy) error {
 
+		// All channels between first and second node should have fully
+		// (both sides) specified policies.
+		if inEdge == nil || outEdge == nil {
+			return fmt.Errorf("channel policy not present")
+		}
+
 		// Each should indicate that it's outgoing (pointed
 		// towards the second node).
 		if !bytes.Equal(outEdge.Node.PubKeyBytes[:], secondNode.PubKeyBytes[:]) {
@@ -997,7 +1012,7 @@ func assertNumNodes(t *testing.T, graph *ChannelGraph, n int) {
 	}
 }
 
-func assertChanViewEqual(t *testing.T, a []wire.OutPoint, b []*wire.OutPoint) {
+func assertChanViewEqual(t *testing.T, a []EdgePoint, b []EdgePoint) {
 	if len(a) != len(b) {
 		_, _, line, _ := runtime.Caller(1)
 		t.Fatalf("line %v: chan views don't match", line)
@@ -1005,14 +1020,34 @@ func assertChanViewEqual(t *testing.T, a []wire.OutPoint, b []*wire.OutPoint) {
 
 	chanViewSet := make(map[wire.OutPoint]struct{})
 	for _, op := range a {
-		chanViewSet[op] = struct{}{}
+		chanViewSet[op.OutPoint] = struct{}{}
+	}
+
+	for _, op := range b {
+		if _, ok := chanViewSet[op.OutPoint]; !ok {
+			_, _, line, _ := runtime.Caller(1)
+			t.Fatalf("line %v: chanPoint(%v) not found in first "+
+				"view", line, op)
+		}
+	}
+}
+
+func assertChanViewEqualChanPoints(t *testing.T, a []EdgePoint, b []*wire.OutPoint) {
+	if len(a) != len(b) {
+		_, _, line, _ := runtime.Caller(1)
+		t.Fatalf("line %v: chan views don't match", line)
+	}
+
+	chanViewSet := make(map[wire.OutPoint]struct{})
+	for _, op := range a {
+		chanViewSet[op.OutPoint] = struct{}{}
 	}
 
 	for _, op := range b {
 		if _, ok := chanViewSet[*op]; !ok {
 			_, _, line, _ := runtime.Caller(1)
-			t.Fatalf("line %v: chanPoint(%v) not found in first view",
-				line, op)
+			t.Fatalf("line %v: chanPoint(%v) not found in first "+
+				"view", line, op)
 		}
 	}
 }
@@ -1056,6 +1091,7 @@ func TestGraphPruning(t *testing.T) {
 	// With the vertexes created, we'll next create a series of channels
 	// between them.
 	channelPoints := make([]*wire.OutPoint, 0, numNodes-1)
+	edgePoints := make([]EdgePoint, 0, numNodes-1)
 	for i := 0; i < numNodes-1; i++ {
 		txHash := sha256.Sum256([]byte{byte(i)})
 		chanID := uint64(i + 1)
@@ -1086,6 +1122,17 @@ func TestGraphPruning(t *testing.T) {
 			t.Fatalf("unable to add node: %v", err)
 		}
 
+		pkScript, err := genMultiSigP2WSH(
+			edgeInfo.BitcoinKey1Bytes[:], edgeInfo.BitcoinKey2Bytes[:],
+		)
+		if err != nil {
+			t.Fatalf("unable to gen multi-sig p2wsh: %v", err)
+		}
+		edgePoints = append(edgePoints, EdgePoint{
+			FundingPkScript: pkScript,
+			OutPoint:        op,
+		})
+
 		// Create and add an edge with random data that points from
 		// node_i -> node_i+1
 		edge := randEdgePolicy(chanID, op, db)
@@ -1113,7 +1160,7 @@ func TestGraphPruning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to get graph channel view: %v", err)
 	}
-	assertChanViewEqual(t, channelView, channelPoints)
+	assertChanViewEqual(t, channelView, edgePoints)
 
 	// Now with our test graph created, we can test the pruning
 	// capabilities of the channel graph.
@@ -1145,7 +1192,7 @@ func TestGraphPruning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to get graph channel view: %v", err)
 	}
-	assertChanViewEqual(t, channelView, channelPoints[2:])
+	assertChanViewEqualChanPoints(t, channelView, channelPoints[2:])
 
 	// Next we'll create a block that doesn't close any channels within the
 	// graph to test the negative error case.
@@ -1909,6 +1956,119 @@ func TestFetchChanInfos(t *testing.T) {
 	}
 }
 
+// TestIncompleteChannelPolicies tests that a channel that only has a policy
+// specified on one end is properly returned in ForEachChannel calls from
+// both sides.
+func TestIncompleteChannelPolicies(t *testing.T) {
+	t.Parallel()
+
+	db, cleanUp, err := makeTestDB()
+	defer cleanUp()
+	if err != nil {
+		t.Fatalf("unable to make test database: %v", err)
+	}
+
+	graph := db.ChannelGraph()
+
+	// Create two nodes.
+	node1, err := createTestVertex(db)
+	if err != nil {
+		t.Fatalf("unable to create test node: %v", err)
+	}
+	if err := graph.AddLightningNode(node1); err != nil {
+		t.Fatalf("unable to add node: %v", err)
+	}
+	node2, err := createTestVertex(db)
+	if err != nil {
+		t.Fatalf("unable to create test node: %v", err)
+	}
+	if err := graph.AddLightningNode(node2); err != nil {
+		t.Fatalf("unable to add node: %v", err)
+	}
+
+	// Create channel between nodes.
+	txHash := sha256.Sum256([]byte{0})
+	op := wire.OutPoint{
+		Hash:  txHash,
+		Index: 0,
+	}
+
+	channel, chanID := createEdge(
+		uint32(0), 0, 0, 0, node1, node2,
+	)
+
+	if err := graph.AddChannelEdge(&channel); err != nil {
+		t.Fatalf("unable to create channel edge: %v", err)
+	}
+
+	// Ensure that channel is reported with unknown policies.
+
+	checkPolicies := func(node *LightningNode, expectedIn, expectedOut bool) {
+		calls := 0
+		node.ForEachChannel(nil, func(_ *bolt.Tx, _ *ChannelEdgeInfo,
+			outEdge, inEdge *ChannelEdgePolicy) error {
+
+			if !expectedOut && outEdge != nil {
+				t.Fatalf("Expected no outgoing policy")
+			}
+
+			if expectedOut && outEdge == nil {
+				t.Fatalf("Expected an outgoing policy")
+			}
+
+			if !expectedIn && inEdge != nil {
+				t.Fatalf("Expected no incoming policy")
+			}
+
+			if expectedIn && inEdge == nil {
+				t.Fatalf("Expected an incoming policy")
+			}
+
+			calls++
+
+			return nil
+		})
+
+		if calls != 1 {
+			t.Fatalf("Expected only one callback call")
+		}
+	}
+
+	checkPolicies(node2, false, false)
+
+	// Only create an edge policy for node1 and leave the policy for node2
+	// unknown.
+	updateTime := time.Unix(1234, 0)
+
+	edgePolicy := newEdgePolicy(
+		chanID.ToUint64(), op, db, updateTime.Unix(),
+	)
+	edgePolicy.Flags = 0
+	edgePolicy.Node = node2
+	edgePolicy.SigBytes = testSig.Serialize()
+	if err := graph.UpdateEdgePolicy(edgePolicy); err != nil {
+		t.Fatalf("unable to update edge: %v", err)
+	}
+
+	checkPolicies(node1, false, true)
+	checkPolicies(node2, true, false)
+
+	// Create second policy and assert that both policies are reported
+	// as present.
+	edgePolicy = newEdgePolicy(
+		chanID.ToUint64(), op, db, updateTime.Unix(),
+	)
+	edgePolicy.Flags = 1
+	edgePolicy.Node = node1
+	edgePolicy.SigBytes = testSig.Serialize()
+	if err := graph.UpdateEdgePolicy(edgePolicy); err != nil {
+		t.Fatalf("unable to update edge: %v", err)
+	}
+
+	checkPolicies(node1, true, true)
+	checkPolicies(node2, true, true)
+}
+
 // TestChannelEdgePruningUpdateIndexDeletion tests that once edges are deleted
 // from the graph, then their entries within the update index are also cleaned
 // up.
@@ -2204,6 +2364,70 @@ func TestAddChannelEdgeShellNodes(t *testing.T) {
 	}
 	if node2.HaveNodeAnnouncement {
 		t.Fatalf("should have shell announcement for node2, but is full")
+	}
+}
+
+// TestNodePruningUpdateIndexDeletion tests that once a node has been removed
+// from the channel graph, we also remove the entry from the update index as
+// well.
+func TestNodePruningUpdateIndexDeletion(t *testing.T) {
+	t.Parallel()
+
+	db, cleanUp, err := makeTestDB()
+	defer cleanUp()
+	if err != nil {
+		t.Fatalf("unable to make test database: %v", err)
+	}
+
+	graph := db.ChannelGraph()
+
+	// We'll first populate our graph with a single node that will be
+	// removed shortly.
+	node1, err := createTestVertex(db)
+	if err != nil {
+		t.Fatalf("unable to create test node: %v", err)
+	}
+	if err := graph.AddLightningNode(node1); err != nil {
+		t.Fatalf("unable to add node: %v", err)
+	}
+
+	// We'll confirm that we can retrieve the node using
+	// NodeUpdatesInHorizon, using a time that's slightly beyond the last
+	// update time of our test node.
+	startTime := time.Unix(9, 0)
+	endTime := node1.LastUpdate.Add(time.Minute)
+	nodesInHorizon, err := graph.NodeUpdatesInHorizon(startTime, endTime)
+	if err != nil {
+		t.Fatalf("unable to fetch nodes in horizon: %v", err)
+	}
+
+	// We should only have a single node, and that node should exactly
+	// match the node we just inserted.
+	if len(nodesInHorizon) != 1 {
+		t.Fatalf("should have 1 nodes instead have: %v",
+			len(nodesInHorizon))
+	}
+	if err := compareNodes(node1, &nodesInHorizon[0]); err != nil {
+		t.Fatalf("nodes don't match: %v", err)
+	}
+
+	// We'll now delete the node from the graph, this should result in it
+	// being removed from the update index as well.
+	nodePub, _ := node1.PubKey()
+	if err := graph.DeleteLightningNode(nodePub); err != nil {
+		t.Fatalf("unable to delete node: %v", err)
+	}
+
+	// Now that the node has been deleted, we'll again query the nodes in
+	// the horizon. This time we should have no nodes at all.
+	nodesInHorizon, err = graph.NodeUpdatesInHorizon(startTime, endTime)
+	if err != nil {
+		t.Fatalf("unable to fetch nodes in horizon: %v", err)
+	}
+
+	if len(nodesInHorizon) != 0 {
+		t.Fatalf("should have zero nodes instead have: %v",
+			len(nodesInHorizon))
 	}
 }
 
