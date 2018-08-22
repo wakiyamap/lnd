@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/wire"
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/wire"
 )
 
 type mockChainIO struct{}
@@ -18,7 +18,7 @@ func (*mockChainIO) GetBestBlock() (*chainhash.Hash, int32, error) {
 	return nil, 0, nil
 }
 
-func (*mockChainIO) GetUtxo(op *wire.OutPoint,
+func (*mockChainIO) GetUtxo(op *wire.OutPoint, _ []byte,
 	heightHint uint32) (*wire.TxOut, error) {
 	return nil, nil
 }

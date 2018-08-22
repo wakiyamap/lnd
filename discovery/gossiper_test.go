@@ -18,6 +18,9 @@ import (
 	"io/ioutil"
 	"os"
 
+	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/wire"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-errors/errors"
 	"github.com/wakiyamap/lnd/chainntnfs"
@@ -26,9 +29,6 @@ import (
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/wakiyamap/lnd/routing"
-	"github.com/btcsuite/btcd/btcec"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/wire"
 )
 
 var (
@@ -258,12 +258,12 @@ func newMockNotifier() *mockNotifier {
 }
 
 func (m *mockNotifier) RegisterConfirmationsNtfn(txid *chainhash.Hash,
-	numConfs, _ uint32) (*chainntnfs.ConfirmationEvent, error) {
+	_ []byte, numConfs, _ uint32) (*chainntnfs.ConfirmationEvent, error) {
 
 	return nil, nil
 }
 
-func (m *mockNotifier) RegisterSpendNtfn(outpoint *wire.OutPoint,
+func (m *mockNotifier) RegisterSpendNtfn(outpoint *wire.OutPoint, _ []byte,
 	_ uint32) (*chainntnfs.SpendEvent, error) {
 	return nil, nil
 }
@@ -280,7 +280,8 @@ func (m *mockNotifier) notifyBlock(hash chainhash.Hash, height uint32) {
 	}
 }
 
-func (m *mockNotifier) RegisterBlockEpochNtfn() (*chainntnfs.BlockEpochEvent, error) {
+func (m *mockNotifier) RegisterBlockEpochNtfn(
+	bestBlock *chainntnfs.BlockEpoch) (*chainntnfs.BlockEpochEvent, error) {
 	m.RLock()
 	defer m.RUnlock()
 

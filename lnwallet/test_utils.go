@@ -12,16 +12,16 @@ import (
 	"os"
 	"sync"
 
-	"github.com/wakiyamap/lnd/channeldb"
-	"github.com/wakiyamap/lnd/keychain"
-	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/wakiyamap/lnd/shachain"
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
+	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/keychain"
+	"github.com/wakiyamap/lnd/lnwire"
+	"github.com/wakiyamap/lnd/shachain"
 )
 
 var (
@@ -229,12 +229,11 @@ func CreateTestChannels() (*LightningChannel, *LightningChannel, func(), error) 
 		return nil, nil, nil, err
 	}
 
-	estimator := &StaticFeeEstimator{24}
-	feePerVSize, err := estimator.EstimateFeePerVSize(1)
+	estimator := &StaticFeeEstimator{FeePerKW: 6000}
+	feePerKw, err := estimator.EstimateFeePerKW(1)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	feePerKw := feePerVSize.FeePerKWeight()
 	commitFee := calcStaticFee(0)
 
 	aliceCommit := channeldb.ChannelCommitment{

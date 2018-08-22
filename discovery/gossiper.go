@@ -408,7 +408,7 @@ func (d *AuthenticatedGossiper) Start() error {
 	// First we register for new notifications of newly discovered blocks.
 	// We do this immediately so we'll later be able to consume any/all
 	// blocks which were discovered.
-	blockEpochs, err := d.cfg.Notifier.RegisterBlockEpochNtfn()
+	blockEpochs, err := d.cfg.Notifier.RegisterBlockEpochNtfn(nil)
 	if err != nil {
 		return err
 	}
@@ -796,7 +796,13 @@ func (d *AuthenticatedGossiper) resendAnnounceSignatures() error {
 			if err != nil {
 				return err
 			}
-			t := msgTuple{peer, msg, k}
+
+			// Make a copy of the database key corresponding to
+			// these AnnounceSignatures.
+			dbKey := make([]byte, len(k))
+			copy(dbKey, k)
+
+			t := msgTuple{peer, msg, dbKey}
 
 			// Add the message to the slice, such that we can
 			// resend it after the database transaction is over.
@@ -921,11 +927,13 @@ func (d *AuthenticatedGossiper) findGossipSyncer(pub *btcec.PublicKey) (*gossipS
 
 	// At this point, a syncer doesn't yet exist, so we'll create a new one
 	// for the peer and return it to the caller.
+	encoding := lnwire.EncodingSortedPlain
 	syncer = newGossiperSyncer(gossipSyncerCfg{
 		chainHash:       d.cfg.ChainHash,
 		syncChanUpdates: true,
 		channelSeries:   d.cfg.ChanSeries,
-		encodingType:    lnwire.EncodingSortedPlain,
+		encodingType:    encoding,
+		chunkSize:       encodingTypeToChunkSize[encoding],
 		sendToPeer: func(msgs ...lnwire.Message) error {
 			return syncPeer.SendMessage(false, msgs...)
 		},
@@ -1217,9 +1225,9 @@ func (d *AuthenticatedGossiper) networkHandler() {
 	}
 }
 
-// TODO(roasbeef): d/c peers that send uupdates not on our chain
+// TODO(roasbeef): d/c peers that send updates not on our chain
 
-// InitPeerSyncState is called by outside sub-systems when a connection is
+// InitSyncState is called by outside sub-systems when a connection is
 // established to a new peer that understands how to perform channel range
 // queries. We'll allocate a new gossip syncer for it, and start any goroutines
 // needed to handle new queries. The recvUpdates bool indicates if we should
@@ -1236,14 +1244,15 @@ func (d *AuthenticatedGossiper) InitSyncState(syncPeer lnpeer.Peer, recvUpdates 
 		return
 	}
 
-	log.Infof("Creating new gossipSyncer for peer=%x",
-		nodeID[:])
+	log.Infof("Creating new gossipSyncer for peer=%x", nodeID[:])
 
+	encoding := lnwire.EncodingSortedPlain
 	syncer := newGossiperSyncer(gossipSyncerCfg{
 		chainHash:       d.cfg.ChainHash,
 		syncChanUpdates: recvUpdates,
 		channelSeries:   d.cfg.ChanSeries,
-		encodingType:    lnwire.EncodingSortedPlain,
+		encodingType:    encoding,
+		chunkSize:       encodingTypeToChunkSize[encoding],
 		sendToPeer: func(msgs ...lnwire.Message) error {
 			return syncPeer.SendMessage(false, msgs...)
 		},

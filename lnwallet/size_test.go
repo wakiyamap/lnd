@@ -3,12 +3,12 @@ package lnwallet_test
 import (
 	"testing"
 
-	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
+	"github.com/wakiyamap/lnd/lnwallet"
 )
 
 // TestTxWeightEstimator tests that transaction weight estimates are calculated

@@ -8,9 +8,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/btcjson"
-	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/rpcclient"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcwallet/chain"
@@ -19,7 +17,6 @@ import (
 )
 
 const (
-
 	// notifierType uniquely identifies this concrete implementation of the
 	// ChainNotifier interface.
 	notifierType = "bitcoind"
@@ -35,6 +32,11 @@ var (
 	// measure a spend notification when notifier is already stopped.
 	ErrChainNotifierShuttingDown = errors.New("chainntnfs: system interrupt " +
 		"while attempting to register for spend notification.")
+
+	// ErrTransactionNotFound is an error returned when we attempt to find a
+	// transaction by manually scanning the chain within a specific range
+	// but it is not found.
+	ErrTransactionNotFound = errors.New("transaction not found within range")
 )
 
 // chainUpdate encapsulates an update to the current main chain. This struct is
@@ -54,6 +56,7 @@ type chainUpdate struct {
 // chain client. Multiple concurrent clients are supported. All notifications
 // are achieved via non-blocking sends on client channels.
 type BitcoindNotifier struct {
+	confClientCounter  uint64 // To be used atomically.
 	spendClientCounter uint64 // To be used atomically.
 	epochClientCounter uint64 // To be used atomically.
 
@@ -71,6 +74,8 @@ type BitcoindNotifier struct {
 
 	blockEpochClients map[uint64]*blockEpochRegistration
 
+	bestBlock chainntnfs.BlockEpoch
+
 	wg   sync.WaitGroup
 	quit chan struct{}
 }
@@ -82,8 +87,7 @@ var _ chainntnfs.ChainNotifier = (*BitcoindNotifier)(nil)
 // New returns a new BitcoindNotifier instance. This function assumes the
 // bitcoind node  detailed in the passed configuration is already running, and
 // willing to accept RPC requests and new zmq clients.
-func New(config *rpcclient.ConnConfig, zmqConnect string,
-	params chaincfg.Params) (*BitcoindNotifier, error) {
+func New(chainConn *chain.BitcoindConn) *BitcoindNotifier {
 	notifier := &BitcoindNotifier{
 		notificationCancels:  make(chan interface{}),
 		notificationRegistry: make(chan interface{}),
@@ -95,18 +99,9 @@ func New(config *rpcclient.ConnConfig, zmqConnect string,
 		quit: make(chan struct{}),
 	}
 
-	// Disable connecting to bitcoind within the rpcclient.New method. We
-	// defer establishing the connection to our .Start() method.
-	config.DisableConnectOnNew = true
-	config.DisableAutoReconnect = false
-	chainConn, err := chain.NewBitcoindClient(&params, config.Host,
-		config.User, config.Pass, zmqConnect, 100*time.Millisecond)
-	if err != nil {
-		return nil, err
-	}
-	notifier.chainConn = chainConn
+	notifier.chainConn = chainConn.NewBitcoindClient(time.Unix(0, 0))
 
-	return notifier, nil
+	return notifier
 }
 
 // Start connects to the running bitcoind node over websockets, registers for
@@ -126,7 +121,7 @@ func (b *BitcoindNotifier) Start() error {
 		return err
 	}
 
-	_, currentHeight, err := b.chainConn.GetBestBlock()
+	currentHash, currentHeight, err := b.chainConn.GetBestBlock()
 	if err != nil {
 		return err
 	}
@@ -134,8 +129,13 @@ func (b *BitcoindNotifier) Start() error {
 	b.txConfNotifier = chainntnfs.NewTxConfNotifier(
 		uint32(currentHeight), reorgSafetyLimit)
 
+	b.bestBlock = chainntnfs.BlockEpoch{
+		Height: currentHeight,
+		Hash:   currentHash,
+	}
+
 	b.wg.Add(1)
-	go b.notificationDispatcher(currentHeight)
+	go b.notificationDispatcher()
 
 	return nil
 }
@@ -181,7 +181,7 @@ type blockNtfn struct {
 
 // notificationDispatcher is the primary goroutine which handles client
 // notification registrations, as well as notification dispatches.
-func (b *BitcoindNotifier) notificationDispatcher(bestHeight int32) {
+func (b *BitcoindNotifier) notificationDispatcher() {
 out:
 	for {
 		select {
@@ -236,89 +236,140 @@ out:
 					b.spendNotifications[op] = make(map[uint64]*spendNotification)
 				}
 				b.spendNotifications[op][msg.spendID] = msg
-				b.chainConn.NotifySpent([]*wire.OutPoint{&op})
+
 			case *confirmationNotification:
 				chainntnfs.Log.Infof("New confirmation "+
 					"subscription: txid=%v, numconfs=%v",
 					msg.TxID, msg.NumConfirmations)
 
-				_, currentHeight, err := b.chainConn.GetBestBlock()
-				if err != nil {
-					chainntnfs.Log.Error(err)
-				}
+				currentHeight := uint32(b.bestBlock.Height)
 
-				// Lookup whether the transaction is already included in the
-				// active chain.
-				txConf, err := b.historicalConfDetails(
-					msg.TxID, msg.heightHint, uint32(currentHeight),
-				)
-				if err != nil {
-					chainntnfs.Log.Error(err)
-				}
+				// Look up whether the transaction is already
+				// included in the active chain. We'll do this
+				// in a goroutine to prevent blocking
+				// potentially long rescans.
+				b.wg.Add(1)
+				go func() {
+					defer b.wg.Done()
 
-				err = b.txConfNotifier.Register(&msg.ConfNtfn, txConf)
-				if err != nil {
-					chainntnfs.Log.Error(err)
-				}
+					confDetails, err := b.historicalConfDetails(
+						msg.TxID, msg.heightHint,
+						currentHeight,
+					)
+					if err != nil {
+						chainntnfs.Log.Error(err)
+						return
+					}
+
+					if confDetails != nil {
+						err := b.txConfNotifier.UpdateConfDetails(
+							*msg.TxID, msg.ConfID,
+							confDetails,
+						)
+						if err != nil {
+							chainntnfs.Log.Error(err)
+						}
+					}
+				}()
+
 			case *blockEpochRegistration:
 				chainntnfs.Log.Infof("New block epoch subscription")
 				b.blockEpochClients[msg.epochID] = msg
+				if msg.bestBlock != nil {
+					missedBlocks, err :=
+						chainntnfs.GetClientMissedBlocks(
+							b.chainConn, msg.bestBlock,
+							b.bestBlock.Height, true,
+						)
+					if err != nil {
+						msg.errorChan <- err
+						continue
+					}
+					for _, block := range missedBlocks {
+						b.notifyBlockEpochClient(msg,
+							block.Height, block.Hash)
+					}
+				}
+				msg.errorChan <- nil
+
 			case chain.RelevantTx:
-				b.handleRelevantTx(msg, bestHeight)
+				b.handleRelevantTx(msg, b.bestBlock.Height)
 			}
 
 		case ntfn := <-b.chainConn.Notifications():
 			switch item := ntfn.(type) {
 			case chain.BlockConnected:
-				if item.Height != bestHeight+1 {
-					chainntnfs.Log.Warnf("Received blocks out of order: "+
-						"current height=%d, new height=%d",
-						bestHeight, item.Height)
-					continue
-				}
-				bestHeight = item.Height
-
-				rawBlock, err := b.chainConn.GetBlock(&item.Hash)
+				blockHeader, err :=
+					b.chainConn.GetBlockHeader(&item.Hash)
 				if err != nil {
-					chainntnfs.Log.Errorf("Unable to get block: %v", err)
+					chainntnfs.Log.Errorf("Unable to fetch "+
+						"block header: %v", err)
 					continue
 				}
 
-				chainntnfs.Log.Infof("New block: height=%v, sha=%v",
-					item.Height, item.Hash)
+				if blockHeader.PrevBlock != *b.bestBlock.Hash {
+					// Handle the case where the notifier
+					// missed some blocks from its chain
+					// backend.
+					chainntnfs.Log.Infof("Missed blocks, " +
+						"attempting to catch up")
+					newBestBlock, missedBlocks, err :=
+						chainntnfs.HandleMissedBlocks(
+							b.chainConn,
+							b.txConfNotifier,
+							b.bestBlock, item.Height,
+							true,
+						)
 
-				b.notifyBlockEpochs(item.Height, &item.Hash)
+					if err != nil {
+						// Set the bestBlock here in case
+						// a catch up partially completed.
+						b.bestBlock = newBestBlock
+						chainntnfs.Log.Error(err)
+						continue
+					}
 
-				txns := btcutil.NewBlock(rawBlock).Transactions()
-				err = b.txConfNotifier.ConnectTip(&item.Hash,
-					uint32(item.Height), txns)
-				if err != nil {
+					for _, block := range missedBlocks {
+						err := b.handleBlockConnected(block)
+						if err != nil {
+							chainntnfs.Log.Error(err)
+							continue out
+						}
+					}
+				}
+
+				newBlock := chainntnfs.BlockEpoch{
+					Height: item.Height,
+					Hash:   &item.Hash,
+				}
+				if err := b.handleBlockConnected(newBlock); err != nil {
 					chainntnfs.Log.Error(err)
 				}
+
 				continue
 
 			case chain.BlockDisconnected:
-				if item.Height != bestHeight {
-					chainntnfs.Log.Warnf("Received blocks "+
-						"out of order: current height="+
-						"%d, disconnected height=%d",
-						bestHeight, item.Height)
-					continue
+				if item.Height != b.bestBlock.Height {
+					chainntnfs.Log.Infof("Missed disconnected" +
+						"blocks, attempting to catch up")
 				}
-				bestHeight = item.Height - 1
 
-				chainntnfs.Log.Infof("Block disconnected from "+
-					"main chain: height=%v, sha=%v",
-					item.Height, item.Hash)
-
-				err := b.txConfNotifier.DisconnectTip(
-					uint32(item.Height))
+				newBestBlock, err := chainntnfs.RewindChain(
+					b.chainConn, b.txConfNotifier,
+					b.bestBlock, item.Height-1,
+				)
 				if err != nil {
-					chainntnfs.Log.Error(err)
+					chainntnfs.Log.Errorf("Unable to rewind chain "+
+						"from height %d to height %d: %v",
+						b.bestBlock.Height, item.Height-1, err)
 				}
+
+				// Set the bestBlock here in case a chain
+				// rewind partially completed.
+				b.bestBlock = newBestBlock
 
 			case chain.RelevantTx:
-				b.handleRelevantTx(item, bestHeight)
+				b.handleRelevantTx(item, b.bestBlock.Height)
 			}
 
 		case <-b.quit:
@@ -473,6 +524,14 @@ func (b *BitcoindNotifier) confDetailsManually(txid *chainhash.Hash,
 	// Begin scanning blocks at every height to determine where the
 	// transaction was included in.
 	for height := heightHint; height <= currentHeight; height++ {
+		// Ensure we haven't been requested to shut down before
+		// processing the next height.
+		select {
+		case <-b.quit:
+			return nil, ErrChainNotifierShuttingDown
+		default:
+		}
+
 		blockHash, err := b.chainConn.GetBlockHash(int64(height))
 		if err != nil {
 			return nil, fmt.Errorf("unable to get hash from block "+
@@ -503,23 +562,57 @@ func (b *BitcoindNotifier) confDetailsManually(txid *chainhash.Hash,
 	return nil, nil
 }
 
+// handleBlockConnected applies a chain update for a new block. Any watched
+// transactions included this block will processed to either send notifications
+// now or after numConfirmations confs.
+func (b *BitcoindNotifier) handleBlockConnected(block chainntnfs.BlockEpoch) error {
+	rawBlock, err := b.chainConn.GetBlock(block.Hash)
+	if err != nil {
+		return fmt.Errorf("unable to get block: %v", err)
+	}
+
+	chainntnfs.Log.Infof("New block: height=%v, sha=%v",
+		block.Height, block.Hash)
+
+	txns := btcutil.NewBlock(rawBlock).Transactions()
+	err = b.txConfNotifier.ConnectTip(
+		block.Hash, uint32(block.Height), txns)
+	if err != nil {
+		return fmt.Errorf("unable to connect tip: %v", err)
+	}
+
+	// We want to set the best block before dispatching notifications so
+	// if any subscribers make queries based on their received block epoch,
+	// our state is fully updated in time.
+	b.bestBlock = block
+
+	b.notifyBlockEpochs(block.Height, block.Hash)
+
+	return nil
+}
+
 // notifyBlockEpochs notifies all registered block epoch clients of the newly
 // connected block to the main chain.
 func (b *BitcoindNotifier) notifyBlockEpochs(newHeight int32, newSha *chainhash.Hash) {
+	for _, client := range b.blockEpochClients {
+		b.notifyBlockEpochClient(client, newHeight, newSha)
+	}
+}
+
+// notifyBlockEpochClient sends a registered block epoch client a notification
+// about a specific block.
+func (b *BitcoindNotifier) notifyBlockEpochClient(epochClient *blockEpochRegistration,
+	height int32, sha *chainhash.Hash) {
+
 	epoch := &chainntnfs.BlockEpoch{
-		Height: newHeight,
-		Hash:   newSha,
+		Height: height,
+		Hash:   sha,
 	}
 
-	for _, epochClient := range b.blockEpochClients {
-		select {
-
-		case epochClient.epochQueue.ChanIn() <- epoch:
-
-		case <-epochClient.cancelChan:
-
-		case <-b.quit:
-		}
+	select {
+	case epochClient.epochQueue.ChanIn() <- epoch:
+	case <-epochClient.cancelChan:
+	case <-b.quit:
 	}
 }
 
@@ -551,7 +644,7 @@ type spendCancel struct {
 // across the 'Spend' channel. The heightHint should represent the earliest
 // height in the chain where the transaction could have been spent in.
 func (b *BitcoindNotifier) RegisterSpendNtfn(outpoint *wire.OutPoint,
-	heightHint uint32) (*chainntnfs.SpendEvent, error) {
+	pkScript []byte, heightHint uint32) (*chainntnfs.SpendEvent, error) {
 
 	ntfn := &spendNotification{
 		targetOutpoint: outpoint,
@@ -632,43 +725,22 @@ func (b *BitcoindNotifier) RegisterSpendNtfn(outpoint *wire.OutPoint,
 				return nil, err
 			}
 
-		out:
-			for i := startHeight; i <= endHeight; i++ {
-				blockHash, err := b.chainConn.GetBlockHash(int64(i))
+			// In order to ensure we don't block the caller on what
+			// may be a long rescan, we'll launch a goroutine to do
+			// so in the background.
+			b.wg.Add(1)
+			go func() {
+				defer b.wg.Done()
+
+				err := b.dispatchSpendDetailsManually(
+					*outpoint, startHeight, endHeight,
+				)
 				if err != nil {
-					return nil, err
+					chainntnfs.Log.Errorf("Rescan for spend "+
+						"notification txout(%x) "+
+						"failed: %v", outpoint, err)
 				}
-				block, err := b.chainConn.GetBlock(blockHash)
-				if err != nil {
-					return nil, err
-				}
-				for _, tx := range block.Transactions {
-					for _, in := range tx.TxIn {
-						if in.PreviousOutPoint == *outpoint {
-							relTx := chain.RelevantTx{
-								TxRecord: &wtxmgr.TxRecord{
-									MsgTx:    *tx,
-									Hash:     tx.TxHash(),
-									Received: block.Header.Timestamp,
-								},
-								Block: &wtxmgr.BlockMeta{
-									Block: wtxmgr.Block{
-										Hash:   block.BlockHash(),
-										Height: i,
-									},
-									Time: block.Header.Timestamp,
-								},
-							}
-							select {
-							case <-b.quit:
-								return nil, ErrChainNotifierShuttingDown
-							case b.notificationRegistry <- relTx:
-							}
-							break out
-						}
-					}
-				}
-			}
+			}()
 		}
 	}
 
@@ -683,8 +755,9 @@ func (b *BitcoindNotifier) RegisterSpendNtfn(outpoint *wire.OutPoint,
 			// Submit spend cancellation to notification dispatcher.
 			select {
 			case b.notificationCancels <- cancel:
-				// Cancellation is being handled, drain the spend chan until it is
-				// closed before yielding to the caller.
+				// Cancellation is being handled, drain the
+				// spend chan until it is closed before yielding
+				// to the caller.
 				for {
 					select {
 					case _, ok := <-ntfn.spendChan:
@@ -701,6 +774,72 @@ func (b *BitcoindNotifier) RegisterSpendNtfn(outpoint *wire.OutPoint,
 	}, nil
 }
 
+// disaptchSpendDetailsManually attempts to manually scan the chain within the
+// given height range for a transaction that spends the given outpoint. If one
+// is found, it's spending details are sent to the notifier dispatcher, which
+// will then dispatch the notification to all of its clients.
+func (b *BitcoindNotifier) dispatchSpendDetailsManually(op wire.OutPoint,
+	startHeight, endHeight int32) error {
+
+	// Begin scanning blocks at every height to determine if the outpoint
+	// was spent.
+	for height := startHeight; height <= endHeight; height++ {
+		// Ensure we haven't been requested to shut down before
+		// processing the next height.
+		select {
+		case <-b.quit:
+			return ErrChainNotifierShuttingDown
+		default:
+		}
+
+		blockHash, err := b.chainConn.GetBlockHash(int64(height))
+		if err != nil {
+			return err
+		}
+		block, err := b.chainConn.GetBlock(blockHash)
+		if err != nil {
+			return err
+		}
+
+		for _, tx := range block.Transactions {
+			for _, in := range tx.TxIn {
+				if in.PreviousOutPoint != op {
+					continue
+				}
+
+				// If this transaction input spends the
+				// outpoint, we'll gather the details of the
+				// spending transaction and dispatch a spend
+				// notification to our clients.
+				relTx := chain.RelevantTx{
+					TxRecord: &wtxmgr.TxRecord{
+						MsgTx:    *tx,
+						Hash:     tx.TxHash(),
+						Received: block.Header.Timestamp,
+					},
+					Block: &wtxmgr.BlockMeta{
+						Block: wtxmgr.Block{
+							Hash:   *blockHash,
+							Height: height,
+						},
+						Time: block.Header.Timestamp,
+					},
+				}
+
+				select {
+				case b.notificationRegistry <- relTx:
+				case <-b.quit:
+					return ErrChainNotifierShuttingDown
+				}
+
+				return nil
+			}
+		}
+	}
+
+	return ErrTransactionNotFound
+}
+
 // confirmationNotification represents a client's intent to receive a
 // notification once the target txid reaches numConfirmations confirmations.
 type confirmationNotification struct {
@@ -712,10 +851,11 @@ type confirmationNotification struct {
 // which will be triggered once the txid reaches numConfs number of
 // confirmations.
 func (b *BitcoindNotifier) RegisterConfirmationsNtfn(txid *chainhash.Hash,
-	numConfs, heightHint uint32) (*chainntnfs.ConfirmationEvent, error) {
+	_ []byte, numConfs, heightHint uint32) (*chainntnfs.ConfirmationEvent, error) {
 
 	ntfn := &confirmationNotification{
 		ConfNtfn: chainntnfs.ConfNtfn{
+			ConfID:           atomic.AddUint64(&b.confClientCounter, 1),
 			TxID:             txid,
 			NumConfirmations: numConfs,
 			Event:            chainntnfs.NewConfirmationEvent(numConfs),
@@ -723,11 +863,15 @@ func (b *BitcoindNotifier) RegisterConfirmationsNtfn(txid *chainhash.Hash,
 		heightHint: heightHint,
 	}
 
+	if err := b.txConfNotifier.Register(&ntfn.ConfNtfn); err != nil {
+		return nil, err
+	}
+
 	select {
-	case <-b.quit:
-		return nil, ErrChainNotifierShuttingDown
 	case b.notificationRegistry <- ntfn:
 		return ntfn.Event, nil
+	case <-b.quit:
+		return nil, ErrChainNotifierShuttingDown
 	}
 }
 
@@ -739,6 +883,10 @@ type blockEpochRegistration struct {
 	epochChan chan *chainntnfs.BlockEpoch
 
 	epochQueue *chainntnfs.ConcurrentQueue
+
+	bestBlock *chainntnfs.BlockEpoch
+
+	errorChan chan error
 
 	cancelChan chan struct{}
 
@@ -753,13 +901,18 @@ type epochCancel struct {
 
 // RegisterBlockEpochNtfn returns a BlockEpochEvent which subscribes the
 // caller to receive notifications, of each new block connected to the main
-// chain.
-func (b *BitcoindNotifier) RegisterBlockEpochNtfn() (*chainntnfs.BlockEpochEvent, error) {
+// chain. Clients have the option of passing in their best known block, which
+// the notifier uses to check if they are behind on blocks and catch them up.
+func (b *BitcoindNotifier) RegisterBlockEpochNtfn(
+	bestBlock *chainntnfs.BlockEpoch) (*chainntnfs.BlockEpochEvent, error) {
+
 	reg := &blockEpochRegistration{
 		epochQueue: chainntnfs.NewConcurrentQueue(20),
 		epochChan:  make(chan *chainntnfs.BlockEpoch, 20),
 		cancelChan: make(chan struct{}),
 		epochID:    atomic.AddUint64(&b.epochClientCounter, 1),
+		bestBlock:  bestBlock,
+		errorChan:  make(chan error, 1),
 	}
 	reg.epochQueue.Start()
 

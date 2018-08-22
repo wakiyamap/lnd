@@ -3,13 +3,13 @@ package main
 import (
 	"fmt"
 
+	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/wakiyamap/lnd/htlcswitch"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/btcsuite/btcd/txscript"
-	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcutil"
 )
 
 var (
@@ -73,7 +73,7 @@ type chanCloseCfg struct {
 	// unregisterChannel is a function closure that allows the
 	// channelCloser to re-register a channel. Once this has been done, no
 	// further HTLC's should be routed through the channel.
-	unregisterChannel func(lnwire.ChannelID) error
+	unregisterChannel func(lnwire.ChannelID)
 
 	// broadcastTx broadcasts the passed transaction to the network.
 	broadcastTx func(*wire.MsgTx) error

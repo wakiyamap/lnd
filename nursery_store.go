@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/coreos/bbolt"
-	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/coreos/bbolt"
+	"github.com/wakiyamap/lnd/channeldb"
 )
 
 //	              Overview of Nursery Store Storage Hierarchy

@@ -7,14 +7,14 @@ import (
 	"os"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcwallet/wallet"
 	"github.com/wakiyamap/lnd/aezeed"
+	"github.com/wakiyamap/lnd/keychain"
 	"github.com/wakiyamap/lnd/lnrpc"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwallet/btcwallet"
-	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcwallet/wallet"
 	"golang.org/x/net/context"
-	"github.com/wakiyamap/lnd/keychain"
 )
 
 // WalletInitMsg is a message sent by the UnlockerService when a user wishes to
@@ -334,7 +334,8 @@ func (u *UnlockerService) ChangePassword(ctx context.Context,
 	// this after unlocking the wallet to ensure macaroon files don't get
 	// deleted with incorrect password attempts.
 	for _, file := range u.macaroonFiles {
-		if err := os.Remove(file); err != nil {
+		err := os.Remove(file)
+		if err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
 	}

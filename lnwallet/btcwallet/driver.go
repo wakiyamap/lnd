@@ -3,8 +3,8 @@ package btcwallet
 import (
 	"fmt"
 
-	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/btcsuite/btcwallet/chain"
+	"github.com/wakiyamap/lnd/lnwallet"
 )
 
 const (

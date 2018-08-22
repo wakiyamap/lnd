@@ -6,13 +6,13 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-errors/errors"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/btcsuite/btcd/btcec"
-	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcutil"
 )
 
 // TopologyClient represents an intent to receive notifications from the

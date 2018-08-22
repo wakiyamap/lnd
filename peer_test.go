@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btclog"
+	"github.com/btcsuite/btcutil"
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/contractcourt"
@@ -14,8 +16,6 @@ import (
 	"github.com/wakiyamap/lnd/lnrpc"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcutil"
 )
 
 func init() {
@@ -169,12 +169,11 @@ func TestPeerChannelClosureAcceptFeeInitiator(t *testing.T) {
 			dummyDeliveryScript),
 	}
 
-	estimator := lnwallet.StaticFeeEstimator{FeeRate: 50}
-	feeRate, err := estimator.EstimateFeePerVSize(1)
+	estimator := lnwallet.StaticFeeEstimator{FeePerKW: 12500}
+	feePerKw, err := estimator.EstimateFeePerKW(1)
 	if err != nil {
 		t.Fatalf("unable to query fee estimator: %v", err)
 	}
-	feePerKw := feeRate.FeePerKWeight()
 	fee := responderChan.CalcFee(feePerKw)
 	closeSig, _, _, err := responderChan.CreateCloseProposal(fee,
 		dummyDeliveryScript, initiatorDeliveryScript)
@@ -460,14 +459,12 @@ func TestPeerChannelClosureFeeNegotiationsInitiator(t *testing.T) {
 		msg: respShutdown,
 	}
 
-	estimator := lnwallet.StaticFeeEstimator{FeeRate: 50}
-	initiatorIdealFeeRate, err := estimator.EstimateFeePerVSize(1)
+	estimator := lnwallet.StaticFeeEstimator{FeePerKW: 12500}
+	initiatorIdealFeeRate, err := estimator.EstimateFeePerKW(1)
 	if err != nil {
 		t.Fatalf("unable to query fee estimator: %v", err)
 	}
-	initiatorIdealFee := responderChan.CalcFee(
-		initiatorIdealFeeRate.FeePerKWeight(),
-	)
+	initiatorIdealFee := responderChan.CalcFee(initiatorIdealFeeRate)
 	increasedFee := btcutil.Amount(float64(initiatorIdealFee) * 2.5)
 	closeSig, _, _, err := responderChan.CreateCloseProposal(
 		increasedFee, dummyDeliveryScript, initiatorDeliveryScript,
