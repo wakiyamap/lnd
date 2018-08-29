@@ -1459,6 +1459,10 @@ type mockPeer struct {
 	quit         chan struct{}
 }
 
+func (m *mockPeer) QuitSignal() <-chan struct{} {
+	return m.quit
+}
+
 var _ lnpeer.Peer = (*mockPeer)(nil)
 
 func (m *mockPeer) SendMessage(sync bool, msgs ...lnwire.Message) error {
@@ -1560,7 +1564,7 @@ func newSingleLinkTestHarness(chanAmt, chanReserve btcutil.Amount) (
 		Registry:       invoiceRegistry,
 		ChainEvents:    &contractcourt.ChainEventSubscription{},
 		BatchTicker:    bticker,
-		FwdPkgGCTicker: ticker.MockNew(5 * time.Second),
+		FwdPkgGCTicker: ticker.MockNew(15 * time.Second),
 		// Make the BatchSize and Min/MaxFeeUpdateTimeout large enough
 		// to not trigger commit updates automatically during tests.
 		BatchSize:           10000,
@@ -3755,8 +3759,8 @@ func TestChannelLinkAcceptDuplicatePayment(t *testing.T) {
 		n.firstBobChannelLink.ShortChanID(), htlc,
 		newMockDeobfuscator(),
 	)
-	if err != nil {
-		t.Fatalf("error shouldn't have been received got: %v", err)
+	if err != ErrAlreadyPaid {
+		t.Fatalf("ErrAlreadyPaid should have been received got: %v", err)
 	}
 }
 

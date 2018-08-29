@@ -315,10 +315,20 @@ func (p *peer) Start() error {
 	return nil
 }
 
+// QuitSignal is a method that should return a channel which will be sent upon
+// or closed once the backing peer exits. This allows callers using the
+// interface to cancel any processing in the event the backing implementation
+// exits.
+//
+// NOTE: Part of the lnpeer.Peer interface.
+func (p *peer) QuitSignal() <-chan struct{} {
+	return p.quit
+}
+
 // loadActiveChannels creates indexes within the peer for tracking all active
 // channels returned by the database.
 func (p *peer) loadActiveChannels(chans []*channeldb.OpenChannel) error {
-	var activeChans []wire.OutPoint
+	var activePublicChans []wire.OutPoint
 	for _, dbChan := range chans {
 		lnChan, err := lnwallet.NewLightningChannel(
 			p.server.cc.signer, p.server.witnessBeacon, dbChan,
@@ -396,10 +406,14 @@ func (p *peer) loadActiveChannels(chans []*channeldb.OpenChannel) error {
 				TimeLockDelta: uint32(selfPolicy.TimeLockDelta),
 			}
 		} else {
+			peerLog.Warnf("Unable to find our forwarding policy "+
+				"for channel %v, using default values",
+				chanPoint)
 			forwardingPolicy = &p.server.cc.routingPolicy
 		}
 
-		peerLog.Tracef("Using link policy of: %v", spew.Sdump(forwardingPolicy))
+		peerLog.Tracef("Using link policy of: %v",
+			spew.Sdump(forwardingPolicy))
 
 		// Register this new channel link with the HTLC Switch. This is
 		// necessary to properly route multi-hop payments, and forward
@@ -427,14 +441,19 @@ func (p *peer) loadActiveChannels(chans []*channeldb.OpenChannel) error {
 		p.activeChannels[chanID] = lnChan
 		p.activeChanMtx.Unlock()
 
-		activeChans = append(activeChans, *chanPoint)
+		// Only if the channel is public do we need to collect it for
+		// sending out a new enable update.
+		chanIsPublic := dbChan.ChannelFlags&lnwire.FFAnnounceChannel != 0
+		if chanIsPublic {
+			activePublicChans = append(activePublicChans, *chanPoint)
+		}
 	}
 
-	// As a final measure we launch a goroutine that will ensure the
-	// channels are not currently disabled, as that will make us skip it
-	// during path finding.
+	// As a final measure we launch a goroutine that will ensure the newly
+	// loaded public channels are not currently disabled, as that will make
+	// us skip it during path finding.
 	go func() {
-		for _, chanPoint := range activeChans {
+		for _, chanPoint := range activePublicChans {
 			// Set the channel disabled=false by sending out a new
 			// ChannelUpdate. If this channel is already active,
 			// the update won't be sent.
@@ -539,22 +558,20 @@ func (p *peer) addLink(chanPoint *wire.OutPoint,
 	}
 
 	linkCfg := htlcswitch.ChannelLinkConfig{
-		Peer:                  p,
-		DecodeHopIterators:    p.server.sphinx.DecodeHopIterators,
-		ExtractErrorEncrypter: p.server.sphinx.ExtractErrorEncrypter,
-		FetchLastChannelUpdate: fetchLastChanUpdate(
-			p.server, p.PubKey(),
-		),
-		DebugHTLC:      cfg.DebugHTLC,
-		HodlMask:       cfg.Hodl.Mask(),
-		Registry:       p.server.invoices,
-		Switch:         p.server.htlcSwitch,
-		Circuits:       p.server.htlcSwitch.CircuitModifier(),
-		ForwardPackets: p.server.htlcSwitch.ForwardPackets,
-		FwrdingPolicy:  *forwardingPolicy,
-		FeeEstimator:   p.server.cc.feeEstimator,
-		PreimageCache:  p.server.witnessBeacon,
-		ChainEvents:    chainEvents,
+		Peer:                   p,
+		DecodeHopIterators:     p.server.sphinx.DecodeHopIterators,
+		ExtractErrorEncrypter:  p.server.sphinx.ExtractErrorEncrypter,
+		FetchLastChannelUpdate: p.server.fetchLastChanUpdate(),
+		DebugHTLC:              cfg.DebugHTLC,
+		HodlMask:               cfg.Hodl.Mask(),
+		Registry:               p.server.invoices,
+		Switch:                 p.server.htlcSwitch,
+		Circuits:               p.server.htlcSwitch.CircuitModifier(),
+		ForwardPackets:         p.server.htlcSwitch.ForwardPackets,
+		FwrdingPolicy:          *forwardingPolicy,
+		FeeEstimator:           p.server.cc.feeEstimator,
+		PreimageCache:          p.server.witnessBeacon,
+		ChainEvents:            chainEvents,
 		UpdateContractSignals: func(signals *contractcourt.ContractSignals) error {
 			return p.server.chainArb.UpdateContractSignals(
 				*chanPoint, signals,
@@ -736,6 +753,7 @@ func (ms *msgStream) Stop() {
 func (ms *msgStream) msgConsumer() {
 	defer ms.wg.Done()
 	defer peerLog.Tracef(ms.stopMsg)
+	defer atomic.StoreInt32(&ms.streamShutdown, 1)
 
 	peerLog.Tracef(ms.startMsg)
 
@@ -750,9 +768,10 @@ func (ms *msgStream) msgConsumer() {
 			// Otherwise, we'll check the message queue for any new
 			// items.
 			select {
+			case <-ms.peer.quit:
+				return
 			case <-ms.quit:
 				ms.msgCond.L.Unlock()
-				atomic.StoreInt32(&ms.streamShutdown, 1)
 				return
 			default:
 			}
@@ -775,8 +794,9 @@ func (ms *msgStream) msgConsumer() {
 		// grow indefinitely.
 		select {
 		case ms.producerSema <- struct{}{}:
+		case <-ms.peer.quit:
+			return
 		case <-ms.quit:
-			atomic.StoreInt32(&ms.streamShutdown, 1)
 			return
 		}
 	}
@@ -784,7 +804,7 @@ func (ms *msgStream) msgConsumer() {
 
 // AddMsg adds a new message to the msgStream. This function is safe for
 // concurrent access.
-func (ms *msgStream) AddMsg(msg lnwire.Message) {
+func (ms *msgStream) AddMsg(msg lnwire.Message, quit chan struct{}) {
 	// First, we'll attempt to receive from the producerSema struct. This
 	// acts as a sempahore to prevent us from indefinitely buffering
 	// incoming items from the wire. Either the msg queue isn't full, and
@@ -792,6 +812,8 @@ func (ms *msgStream) AddMsg(msg lnwire.Message) {
 	// we're signalled to quit, or a slot is freed up.
 	select {
 	case <-ms.producerSema:
+	case <-quit:
+		return
 	case <-ms.quit:
 		return
 	}
@@ -835,13 +857,29 @@ func newChanMsgStream(p *peer, cid lnwire.ChannelID) *msgStream {
 				// to the other side, they immediately send a
 				// channel update message, but we haven't yet
 				// sent the channel to the channelManager.
-				p.server.fundingMgr.waitUntilChannelOpen(cid)
+				err := p.server.fundingMgr.waitUntilChannelOpen(
+					cid, p.quit,
+				)
+				if err != nil {
+					// If we have a non-nil error, then the
+					// funding manager is shutting down, s
+					// we can exit here without attempting
+					// to deliver the message.
+					return
+				}
 			}
 
-			// TODO(roasbeef): only wait if not chan sync
+			// In order to avoid unnecessarily delivering message
+			// as the peer is exiting, we'll check quickly to see
+			// if we need to exit.
+			select {
+			case <-p.quit:
+				return
+			default:
+			}
 
-			// Dispatch the commitment update message to the proper active
-			// goroutine dedicated to this channel.
+			// Dispatch the commitment update message to the proper
+			// active goroutine dedicated to this channel.
 			if chanLink == nil {
 				link, err := p.server.htlcSwitch.GetLink(cid)
 				if err != nil {
@@ -850,6 +888,15 @@ func newChanMsgStream(p *peer, cid lnwire.ChannelID) *msgStream {
 					return
 				}
 				chanLink = link
+			}
+
+			// In order to avoid unnecessarily delivering message
+			// as the peer is exiting, we'll check quickly to see
+			// if we need to exit.
+			select {
+			case <-p.quit:
+				return
+			default:
 			}
 
 			chanLink.HandleChannelUpdate(msg)
@@ -876,6 +923,7 @@ func newDiscMsgStream(p *peer) *msgStream {
 //
 // NOTE: This method MUST be run as a goroutine.
 func (p *peer) readHandler() {
+	defer p.wg.Done()
 
 	// We'll stop the timer after a new messages is received, and also
 	// reset it after we process the next message.
@@ -974,7 +1022,7 @@ out:
 			// forward the error to all channels with this peer.
 			case msg.ChanID == lnwire.ConnectionWideID:
 				for chanID, chanStream := range chanMsgStreams {
-					chanStream.AddMsg(nextMsg)
+					chanStream.AddMsg(nextMsg, p.quit)
 
 					// Also marked this channel as failed,
 					// so we won't try to restart it on
@@ -1036,7 +1084,7 @@ out:
 			*lnwire.ReplyChannelRange,
 			*lnwire.ReplyShortChanIDsEnd:
 
-			discStream.AddMsg(msg)
+			discStream.AddMsg(msg, p.quit)
 
 		default:
 			peerLog.Errorf("unknown message %v received from peer "+
@@ -1054,25 +1102,18 @@ out:
 				chanStream = newChanMsgStream(p, targetChan)
 				chanMsgStreams[targetChan] = chanStream
 				chanStream.Start()
+				defer chanStream.Stop()
 			}
 
 			// With the stream obtained, add the message to the
 			// stream so we can continue processing message.
-			chanStream.AddMsg(nextMsg)
+			chanStream.AddMsg(nextMsg, p.quit)
 		}
 
 		idleTimer.Reset(idleTimeout)
 	}
 
-	p.wg.Done()
-
 	p.Disconnect(errors.New("read handler closed"))
-
-	for cid, chanStream := range chanMsgStreams {
-		chanStream.Stop()
-
-		delete(chanMsgStreams, cid)
-	}
 
 	peerLog.Tracef("readHandler for peer %v done", p)
 }
@@ -1550,9 +1591,23 @@ out:
 				continue
 			}
 
+			// We'll query the localChanCfg of the new channel to
+			// determine the minimum HTLC value that can be
+			// forwarded. For fees we'll use the default values, as
+			// they currently are always set to the default values
+			// at initial channel creation.
+			fwdMinHtlc := newChan.FwdMinHtlc()
+			defaultPolicy := p.server.cc.routingPolicy
+			forwardingPolicy := &htlcswitch.ForwardingPolicy{
+				MinHTLC:       fwdMinHtlc,
+				BaseFee:       defaultPolicy.BaseFee,
+				FeeRate:       defaultPolicy.FeeRate,
+				TimeLockDelta: defaultPolicy.TimeLockDelta,
+			}
+
 			// Create the link and add it to the switch.
 			err = p.addLink(
-				chanPoint, newChan, &p.server.cc.routingPolicy,
+				chanPoint, newChan, forwardingPolicy,
 				chainEvents, currentHeight, false,
 			)
 			if err != nil {
@@ -2098,33 +2153,3 @@ func (p *peer) StartTime() time.Time {
 }
 
 // TODO(roasbeef): make all start/stop mutexes a CAS
-
-// fetchLastChanUpdate returns a function which is able to retrieve the last
-// channel update for a target channel.
-func fetchLastChanUpdate(s *server,
-	pubKey [33]byte) func(lnwire.ShortChannelID) (*lnwire.ChannelUpdate, error) {
-
-	return func(cid lnwire.ShortChannelID) (*lnwire.ChannelUpdate, error) {
-		info, edge1, edge2, err := s.chanRouter.GetChannelByID(cid)
-		if err != nil {
-			return nil, err
-		}
-
-		if edge1 == nil || edge2 == nil {
-			return nil, fmt.Errorf("unable to find channel by "+
-				"ShortChannelID(%v)", cid)
-		}
-
-		// If we're the outgoing node on the first edge, then that
-		// means the second edge is our policy. Otherwise, the first
-		// edge is our policy.
-		var local *channeldb.ChannelEdgePolicy
-		if bytes.Equal(edge1.Node.PubKeyBytes[:], pubKey[:]) {
-			local = edge2
-		} else {
-			local = edge1
-		}
-
-		return extractChannelUpdate(info, local)
-	}
-}
