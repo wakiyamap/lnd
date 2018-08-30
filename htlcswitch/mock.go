@@ -124,14 +124,25 @@ type mockServer struct {
 
 var _ lnpeer.Peer = (*mockServer)(nil)
 
-func initSwitchWithDB(startingHeight uint32, db *channeldb.DB) (*Switch, error) {
-	if db == nil {
-		tempPath, err := ioutil.TempDir("", "switchdb")
-		if err != nil {
-			return nil, err
-		}
+func initDB() (*channeldb.DB, error) {
+	tempPath, err := ioutil.TempDir("", "switchdb")
+	if err != nil {
+		return nil, err
+	}
 
-		db, err = channeldb.Open(tempPath)
+	db, err := channeldb.Open(tempPath)
+	if err != nil {
+		return nil, err
+	}
+
+	return db, err
+}
+
+func initSwitchWithDB(startingHeight uint32, db *channeldb.DB) (*Switch, error) {
+	var err error
+
+	if db == nil {
+		db, err = initDB()
 		if err != nil {
 			return nil, err
 		}
@@ -225,6 +236,10 @@ func (s *mockServer) Start() error {
 	}()
 
 	return nil
+}
+
+func (s *mockServer) QuitSignal() <-chan struct{} {
+	return s.quit
 }
 
 // mockHopIterator represents the test version of hop iterator which instead

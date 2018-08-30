@@ -108,7 +108,7 @@
     "wire",
   ]
   pruneopts = "UT"
-  revision = "f899737d7f2764dc13e4d01ff00108ec58f766a9"
+  revision = "79e00513b1011888b1e675157ab89f527f901cae"
 
 [[projects]]
   digest = "1:30d4a548e09bca4a0c77317c58e7407e2a65c15325e944f9c08a7b7992f8a59e"
@@ -133,7 +133,7 @@
   revision = "ab6388e0c60ae4834a1f57511e20c17b5f78be4b"
 
 [[projects]]
-  digest = "1:04bf3f47dafa64588795c5e0329dc662e867c3afa191051821dbacbe09ba2ca8"
+  digest = "1:b6aad1b935c1e7c6cb6be7ecb65288de11e0df0d6224d757816e40009ec52a2c"
   name = "github.com/btcsuite/btcwallet"
   packages = [
     "chain",
@@ -153,7 +153,7 @@
     "wtxmgr",
   ]
   pruneopts = "UT"
-  revision = "5fb94231d0c814f02ffc3110eee588278151b4e1"
+  revision = "7b84dc25a61634c450d21ec7f47d5e916eb88fdb"
 
 [[projects]]
   branch = "master"
@@ -298,16 +298,18 @@
   revision = "462a8a75388506b68f76661af8d649f0b88e5301"
 
 [[projects]]
-  digest = "1:11ab77a97c0db5cfe9c82f16cb7c47213612033e8bd711e6ddc9a32615fc747d"
+  digest = "1:17f1db965adb240de22a1662b4b712858ae767fe7da94ffd4e321b4dcb4bd553"
   name = "github.com/lightninglabs/neutrino"
   packages = [
     ".",
+    "cache",
+    "cache/lru",
     "filterdb",
     "headerfs",
     "headerlist",
   ]
   pruneopts = "UT"
-  revision = "0d0ce901538af81e234c1b2376babf20fe976b09"
+  revision = "166fe699d5964581d24e6bfff0aa329cfb6a8bc9"
 
 [[projects]]
   digest = "1:a0bf6f18ffeb4a45fd00d5eb16d918769bbe0e2dc7824e95abf05a3306f60102"
@@ -371,6 +373,7 @@
     "curve25519",
     "hkdf",
     "internal/chacha20",
+    "internal/subtle",
     "nacl/box",
     "nacl/secretbox",
     "pbkdf2",
@@ -382,7 +385,7 @@
     "ssh/terminal",
   ]
   pruneopts = "UT"
-  revision = "49796115aa4b964c318aad4f3084fdb41e9aa067"
+  revision = "614d502a4dac94afa3a6ce146bd1736da82514c6"
 
 [[projects]]
   digest = "1:0764abb1e99bb977d1b9f320d02859d4a737252da3e1fd233c4ae0f9522e7446"
