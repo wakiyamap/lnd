@@ -50,7 +50,7 @@ if [[ "$CHAIN" == "monacoin" ]]; then
 fi
 
 exec lnd \
-    --noencryptwallet \
+    --noseedbackup \
     --logdir="/data" \
     "--$CHAIN.active" \
     "--$CHAIN.$NETWORK" \
