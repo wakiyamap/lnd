@@ -3354,7 +3354,7 @@ func (lc *LightningChannel) ProcessChanSyncMsg(
 
 	// We owe them a commitment if the tip of their chain (from our Pov) is
 	// equal to what they think their next commit height should be. We'll
-	// re-send all the updates neccessary to recreate this state, along
+	// re-send all the updates necessary to recreate this state, along
 	// with the commit sig.
 	case msg.NextLocalCommitHeight == remoteTipHeight:
 		walletLog.Debugf("ChannelPoint(%v), sync: remote's next "+
@@ -5109,6 +5109,7 @@ func NewUnilateralCloseSummary(chanState *channeldb.OpenChannel, signer Signer,
 		IsPending:               true,
 		RemoteCurrentRevocation: chanState.RemoteCurrentRevocation,
 		RemoteNextRevocation:    chanState.RemoteNextRevocation,
+		ShortChanID:             chanState.ShortChanID(),
 		LocalChanConfig:         chanState.LocalChanCfg,
 	}
 

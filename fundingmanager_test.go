@@ -18,12 +18,10 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btclog"
 	"github.com/btcsuite/btcutil"
-	_ "github.com/btcsuite/btcwallet/walletdb/bdb"
+
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/channeldb"
-	"github.com/wakiyamap/lnd/contractcourt"
 	"github.com/wakiyamap/lnd/htlcswitch"
 	"github.com/wakiyamap/lnd/keychain"
 	"github.com/wakiyamap/lnd/lnpeer"
@@ -178,13 +176,13 @@ func (n *testNode) QuitSignal() <-chan struct{} {
 	return n.shutdownChannel
 }
 
-func (n *testNode) AddNewChannel(channel *lnwallet.LightningChannel,
+func (n *testNode) AddNewChannel(channel *channeldb.OpenChannel,
 	quit <-chan struct{}) error {
 
-	done := make(chan struct{})
+	errChan := make(chan error)
 	msg := &newChannelMsg{
 		channel: channel,
-		done:    done,
+		err:     errChan,
 	}
 
 	select {
@@ -194,19 +192,11 @@ func (n *testNode) AddNewChannel(channel *lnwallet.LightningChannel,
 	}
 
 	select {
-	case <-done:
+	case err := <-errChan:
+		return err
 	case <-quit:
 		return ErrFundingManagerShuttingDown
 	}
-
-	return nil
-}
-
-func init() {
-	channeldb.UseLogger(btclog.Disabled)
-	lnwallet.UseLogger(btclog.Disabled)
-	contractcourt.UseLogger(btclog.Disabled)
-	fndgLog = btclog.Disabled
 }
 
 func createTestWallet(cdb *channeldb.DB, netParams *chaincfg.Params,
@@ -304,7 +294,8 @@ func createTestFundingManager(t *testing.T, privKey *btcec.PrivateKey,
 			return lnwire.NodeAnnouncement{}, nil
 		},
 		TempChanIDSeed: chanIDSeed,
-		FindChannel: func(chanID lnwire.ChannelID) (*lnwallet.LightningChannel, error) {
+		FindChannel: func(chanID lnwire.ChannelID) (
+			*channeldb.OpenChannel, error) {
 			dbChannels, err := cdb.FetchAllChannels()
 			if err != nil {
 				return nil, err
@@ -312,10 +303,7 @@ func createTestFundingManager(t *testing.T, privKey *btcec.PrivateKey,
 
 			for _, channel := range dbChannels {
 				if chanID.IsChanPoint(&channel.FundingOutpoint) {
-					return lnwallet.NewLightningChannel(
-						signer,
-						nil,
-						channel)
+					return channel, nil
 				}
 			}
 
@@ -825,7 +813,7 @@ func assertAddedToRouterGraph(t *testing.T, alice, bob *testNode,
 // confirmed. The last arguments can be set if we expect the nodes to advertise
 // custom min_htlc values as part of their ChannelUpdate. We expect Alice to
 // advertise the value required by Bob and vice versa. If they are not set the
-// advertised value will be checked againts the other node's default min_htlc
+// advertised value will be checked against the other node's default min_htlc
 // value.
 func assertChannelAnnouncements(t *testing.T, alice, bob *testNode,
 	customMinHtlc ...lnwire.MilliSatoshi) {
@@ -992,14 +980,14 @@ func assertHandleFundingLocked(t *testing.T, alice, bob *testNode) {
 	// They should both send the new channel state to their peer.
 	select {
 	case c := <-alice.newChannels:
-		close(c.done)
+		close(c.err)
 	case <-time.After(time.Second * 15):
 		t.Fatalf("alice did not send new channel to peer")
 	}
 
 	select {
 	case c := <-bob.newChannels:
-		close(c.done)
+		close(c.err)
 	case <-time.After(time.Second * 15):
 		t.Fatalf("bob did not send new channel to peer")
 	}
@@ -1945,7 +1933,7 @@ func TestFundingManagerPrivateChannel(t *testing.T) {
 	bob.mockNotifier.sixConfChannel <- &chainntnfs.TxConfirmation{}
 
 	// Since this is a private channel, we shouldn't receive the
-	// announcement signatures or node announcement messages.
+	// announcement signatures.
 	select {
 	case ann := <-alice.announceChan:
 		t.Fatalf("unexpectedly got channel announcement message: %v", ann)
@@ -1958,6 +1946,25 @@ func TestFundingManagerPrivateChannel(t *testing.T) {
 		t.Fatalf("unexpectedly got channel announcement message: %v", ann)
 	case <-time.After(300 * time.Millisecond):
 		// Expected
+	}
+
+	// We should however receive each side's node announcement.
+	select {
+	case msg := <-alice.msgChan:
+		if _, ok := msg.(*lnwire.NodeAnnouncement); !ok {
+			t.Fatalf("expected to receive node announcement")
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("expected to receive node announcement")
+	}
+
+	select {
+	case msg := <-bob.msgChan:
+		if _, ok := msg.(*lnwire.NodeAnnouncement); !ok {
+			t.Fatalf("expected to receive node announcement")
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("expected to receive node announcement")
 	}
 
 	// The internal state-machine should now have deleted the channelStates
@@ -2025,19 +2032,48 @@ func TestFundingManagerPrivateRestart(t *testing.T) {
 	// channel.
 	assertHandleFundingLocked(t, alice, bob)
 
-	// Restart Alice's fundingManager so we can prove that the public
-	// channel announcements are not sent upon restart and that the private
-	// setting persists upon restart.
-	recreateAliceFundingManager(t, alice)
-	time.Sleep(300 * time.Millisecond)
-
 	// Notify that six confirmations has been reached on funding transaction.
 	alice.mockNotifier.sixConfChannel <- &chainntnfs.TxConfirmation{}
 	bob.mockNotifier.sixConfChannel <- &chainntnfs.TxConfirmation{}
 
 	// Since this is a private channel, we shouldn't receive the public
-	// channel announcement messages announcement signatures or
-	// node announcement.
+	// channel announcement messages.
+	select {
+	case ann := <-alice.announceChan:
+		t.Fatalf("unexpectedly got channel announcement message: %v", ann)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	select {
+	case ann := <-bob.announceChan:
+		t.Fatalf("unexpectedly got channel announcement message: %v", ann)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// We should however receive each side's node announcement.
+	select {
+	case msg := <-alice.msgChan:
+		if _, ok := msg.(*lnwire.NodeAnnouncement); !ok {
+			t.Fatalf("expected to receive node announcement")
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("expected to receive node announcement")
+	}
+
+	select {
+	case msg := <-bob.msgChan:
+		if _, ok := msg.(*lnwire.NodeAnnouncement); !ok {
+			t.Fatalf("expected to receive node announcement")
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("expected to receive node announcement")
+	}
+
+	// Restart Alice's fundingManager so we can prove that the public
+	// channel announcements are not sent upon restart and that the private
+	// setting persists upon restart.
+	recreateAliceFundingManager(t, alice)
+
 	select {
 	case ann := <-alice.announceChan:
 		t.Fatalf("unexpectedly got channel announcement message: %v", ann)

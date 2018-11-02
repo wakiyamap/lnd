@@ -270,27 +270,6 @@ func (d *AuthenticatedGossiper) SynchronizeNode(syncPeer lnpeer.Peer) error {
 	// containing all the messages to be sent to the target peer.
 	var announceMessages []lnwire.Message
 
-	makeNodeAnn := func(n *channeldb.LightningNode) (
-		*lnwire.NodeAnnouncement, error) {
-
-		alias, _ := lnwire.NewNodeAlias(n.Alias)
-
-		wireSig, err := lnwire.NewSigFromRawSignature(n.AuthSigBytes)
-		if err != nil {
-			return nil, err
-		}
-		return &lnwire.NodeAnnouncement{
-			Signature:       wireSig,
-			Timestamp:       uint32(n.LastUpdate.Unix()),
-			Addresses:       n.Addresses,
-			NodeID:          n.PubKeyBytes,
-			Features:        n.Features.RawFeatureVector,
-			RGBColor:        n.Color,
-			Alias:           alias,
-			ExtraOpaqueData: n.ExtraOpaqueData,
-		}, nil
-	}
-
 	// We'll use this map to ensure we don't send the same node
 	// announcement more than one time as one node may have many channel
 	// anns we'll need to send.
@@ -330,7 +309,7 @@ func (d *AuthenticatedGossiper) SynchronizeNode(syncPeer lnpeer.Peer) error {
 				nodePub := e1.Node.PubKeyBytes
 				hasNodeAnn := e1.Node.HaveNodeAnnouncement
 				if _, ok := nodePubsSent[nodePub]; !ok && hasNodeAnn {
-					nodeAnn, err := makeNodeAnn(e1.Node)
+					nodeAnn, err := e1.Node.NodeAnnouncement(true)
 					if err != nil {
 						return err
 					}
@@ -352,7 +331,7 @@ func (d *AuthenticatedGossiper) SynchronizeNode(syncPeer lnpeer.Peer) error {
 				nodePub := e2.Node.PubKeyBytes
 				hasNodeAnn := e2.Node.HaveNodeAnnouncement
 				if _, ok := nodePubsSent[nodePub]; !ok && hasNodeAnn {
-					nodeAnn, err := makeNodeAnn(e2.Node)
+					nodeAnn, err := e2.Node.NodeAnnouncement(true)
 					if err != nil {
 						return err
 					}
@@ -1634,13 +1613,26 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(
 			return nil
 		}
 
-		// Node announcement was successfully proceeded and know it
-		// might be broadcast to other connected nodes.
-		announcements = append(announcements, networkMsg{
-			peer:   nMsg.peer,
-			source: nMsg.source,
-			msg:    msg,
-		})
+		// In order to ensure we don't leak unadvertised nodes, we'll
+		// make a quick check to ensure this node intends to publicly
+		// advertise itself to the network.
+		isPublic, err := d.cfg.Router.IsPublicNode(node.PubKeyBytes)
+		if err != nil {
+			log.Errorf("Unable to determine if node %x is "+
+				"advertised: %v", node.PubKeyBytes, err)
+			nMsg.err <- err
+			return nil
+		}
+
+		// If it does, we'll add their announcement to our batch so that
+		// it can be broadcast to the rest of our peers.
+		if isPublic {
+			announcements = append(announcements, networkMsg{
+				peer:   nMsg.peer,
+				source: nMsg.source,
+				msg:    msg,
+			})
+		}
 
 		nMsg.err <- nil
 		// TODO(roasbeef): get rid of the above
@@ -2048,7 +2040,8 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(
 			if err != nil {
 				log.Errorf("unable to send channel update -- "+
 					"could not find peer %x: %v",
-					remotePub, err)
+					remotePub.SerializeCompressed(),
+					err)
 			} else {
 				// Send ChannelUpdate directly to remotePeer.
 				// TODO(halseth): make reliable send?

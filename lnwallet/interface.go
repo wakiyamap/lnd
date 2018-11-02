@@ -148,11 +148,8 @@ type WalletController interface {
 	// p2wsh, etc.
 	NewAddress(addrType AddressType, change bool) (btcutil.Address, error)
 
-	// GetPrivKey retrieves the underlying private key associated with the
-	// passed address. If the wallet is unable to locate this private key
-	// due to the address not being under control of the wallet, then an
-	// error should be returned.
-	GetPrivKey(a btcutil.Address) (*btcec.PrivateKey, error)
+	// IsOurAddress checks if the passed address belongs to this wallet
+	IsOurAddress(a btcutil.Address) bool
 
 	// SendOutputs funds, signs, and broadcasts a Bitcoin transaction paying
 	// out to the specified outputs. In the case the wallet has insufficient
@@ -163,11 +160,13 @@ type WalletController interface {
 		feeRate SatPerKWeight) (*chainhash.Hash, error)
 
 	// ListUnspentWitness returns all unspent outputs which are version 0
-	// witness programs. The 'confirms' parameter indicates the minimum
-	// number of confirmations an output needs in order to be returned by
-	// this method. Passing -1 as 'confirms' indicates that even
-	// unconfirmed outputs should be returned.
-	ListUnspentWitness(confirms int32) ([]*Utxo, error)
+	// witness programs. The 'minconfirms' and 'maxconfirms' parameters
+	// indicate the minimum and maximum number of confirmations an output
+	// needs in order to be returned by this method. Passing -1 as
+	// 'minconfirms' indicates that even unconfirmed outputs should be
+	// returned. Using MaxInt32 as 'maxconfirms' implies returning all
+	// outputs with at least 'minconfirms'.
+	ListUnspentWitness(minconfirms, maxconfirms int32) ([]*Utxo, error)
 
 	// ListTransactionDetails returns a list of all transactions which are
 	// relevant to the wallet.

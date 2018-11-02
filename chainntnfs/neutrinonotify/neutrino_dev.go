@@ -1,4 +1,4 @@
-// +build debug
+// +build dev
 
 package neutrinonotify
 
@@ -8,31 +8,27 @@ import (
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/rpcclient"
-	"github.com/btcsuite/btcwallet/waddrmgr"
 	"github.com/lightninglabs/neutrino"
 	"github.com/wakiyamap/lnd/chainntnfs"
 )
 
 // UnsafeStart starts the notifier with a specified best height and optional
-// best hash. Its bestHeight, txConfNotifier and neutrino node are initialized
-// with bestHeight. The parameter generateBlocks is necessary for the
-// bitcoind notifier to ensure we drain all notifications up to syncHeight,
-// since if they are generated ahead of UnsafeStart the chainConn may start
-// up with an outdated best block and miss sending ntfns. Used for testing.
-func (n *NeutrinoNotifier) UnsafeStart(bestHeight int32, bestHash *chainhash.Hash,
-	syncHeight int32, generateBlocks func() error) error {
+// best hash. Its bestHeight, txNotifier and neutrino node are initialized with
+// bestHeight. The parameter generateBlocks is necessary for the bitcoind
+// notifier to ensure we drain all notifications up to syncHeight, since if they
+// are generated ahead of UnsafeStart the chainConn may start up with an
+// outdated best block and miss sending ntfns. Used for testing.
+func (n *NeutrinoNotifier) UnsafeStart(bestHeight int32,
+	bestHash *chainhash.Hash, syncHeight int32,
+	generateBlocks func() error) error {
 
 	// We'll obtain the latest block height of the p2p node. We'll
 	// start the auto-rescan from this point. Once a caller actually wishes
 	// to register a chain view, the rescan state will be rewound
 	// accordingly.
-	header, height, err := n.p2pNode.BlockHeaders.ChainTip()
+	startingPoint, err := n.p2pNode.BestBlock()
 	if err != nil {
 		return err
-	}
-	startingPoint := &waddrmgr.BlockStamp{
-		Height: int32(height),
-		Hash:   header.BlockHash(),
 	}
 
 	// Next, we'll create our set of rescan options. Currently it's
@@ -52,8 +48,9 @@ func (n *NeutrinoNotifier) UnsafeStart(bestHeight int32, bestHash *chainhash.Has
 		neutrino.WatchInputs(zeroInput),
 	}
 
-	n.txConfNotifier = chainntnfs.NewTxConfNotifier(
+	n.txNotifier = chainntnfs.NewTxNotifier(
 		uint32(bestHeight), reorgSafetyLimit, n.confirmHintCache,
+		n.spendHintCache,
 	)
 
 	n.chainConn = &NeutrinoChainConn{n.p2pNode}

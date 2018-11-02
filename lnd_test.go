@@ -870,7 +870,9 @@ func assertChannelPolicy(t *harnessTest, node *lntest.HarnessNode,
 	advertisingNode string, expectedPolicy *lnrpc.RoutingPolicy,
 	chanPoints ...*lnrpc.ChannelPoint) {
 
-	descReq := &lnrpc.ChannelGraphRequest{}
+	descReq := &lnrpc.ChannelGraphRequest{
+		IncludeUnannounced: true,
+	}
 	chanGraph, err := node.DescribeGraph(context.Background(), descReq)
 	if err != nil {
 		t.Fatalf("unable to query for alice's graph: %v", err)
@@ -1496,7 +1498,9 @@ func testOpenChannelAfterReorg(net *lntest.NetworkHarness, t *harnessTest) {
 	}
 
 	// Alice should now have 1 edge in her graph.
-	req := &lnrpc.ChannelGraphRequest{}
+	req := &lnrpc.ChannelGraphRequest{
+		IncludeUnannounced: true,
+	}
 	chanGraph, err := net.Alice.DescribeGraph(ctxb, req)
 	if err != nil {
 		t.Fatalf("unable to query for alice's routing table: %v", err)
@@ -1538,7 +1542,9 @@ func testOpenChannelAfterReorg(net *lntest.NetworkHarness, t *harnessTest) {
 
 	// Since the fundingtx was reorged out, Alice should now have no edges
 	// in her graph.
-	req = &lnrpc.ChannelGraphRequest{}
+	req = &lnrpc.ChannelGraphRequest{
+		IncludeUnannounced: true,
+	}
 	chanGraph, err = net.Alice.DescribeGraph(ctxb, req)
 	if err != nil {
 		t.Fatalf("unable to query for alice's routing table: %v", err)
@@ -4122,6 +4128,116 @@ func testSendToRouteErrorPropagation(net *lntest.NetworkHarness, t *harnessTest)
 	closeChannelAndAssert(ctxt, t, net, carol, chanPointCarol, false)
 }
 
+// testUnannouncedChannels checks unannounced channels are not returned by
+// describeGraph RPC request unless explicity asked for.
+func testUnannouncedChannels(net *lntest.NetworkHarness, t *harnessTest) {
+	timeout := time.Duration(time.Second * 5)
+	ctb := context.Background()
+	amount := maxBtcFundingAmount
+
+	// Open a channel between Alice and Bob, ensuring the
+	// channel has been opened properly.
+	ctx, _ := context.WithTimeout(ctb, timeout)
+	chanOpenUpdate, err := net.OpenChannel(
+		ctx, net.Alice, net.Bob,
+		lntest.OpenChannelParams{
+			Amt: amount,
+		},
+	)
+	if err != nil {
+		t.Fatalf("unable to open channel: %v", err)
+	}
+
+	// Mine 2 blocks, and check that the channel is opened but not yet
+	// announced to the network.
+	mineBlocks(t, net, 2)
+
+	// One block is enough to make the channel ready for use, since the
+	// nodes have defaultNumConfs=1 set.
+	ctx, _ = context.WithTimeout(ctb, timeout)
+	fundingChanPoint, err := net.WaitForChannelOpen(ctx, chanOpenUpdate)
+	if err != nil {
+		t.Fatalf("error while waiting for channel open: %v", err)
+	}
+
+	// Alice should have 1 edge in her graph.
+	req := &lnrpc.ChannelGraphRequest{
+		IncludeUnannounced: true,
+	}
+	ctx, _ = context.WithTimeout(ctb, timeout)
+	chanGraph, err := net.Alice.DescribeGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("unable to query alice's graph: %v", err)
+	}
+
+	numEdges := len(chanGraph.Edges)
+	if numEdges != 1 {
+		t.Fatalf("expected to find 1 edge in the graph, found %d", numEdges)
+	}
+
+	// Channels should not be announced yet, hence Alice should have no
+	// announced edges in her graph.
+	req.IncludeUnannounced = false
+	ctx, _ = context.WithTimeout(ctb, timeout)
+	chanGraph, err = net.Alice.DescribeGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("unable to query alice's graph: %v", err)
+	}
+
+	numEdges = len(chanGraph.Edges)
+	if numEdges != 0 {
+		t.Fatalf("expected to find 0 announced edges in the graph, found %d",
+			numEdges)
+	}
+
+	// Mine 4 more blocks, and check that the channel is now announced.
+	mineBlocks(t, net, 4)
+
+	// Give the network a chance to learn that auth proof is confirmed.
+	var predErr error
+	err = lntest.WaitPredicate(func() bool {
+		// The channel should now be announced. Check that Alice has 1
+		// announced edge.
+		req.IncludeUnannounced = false
+		ctx, _ = context.WithTimeout(ctb, timeout)
+		chanGraph, err = net.Alice.DescribeGraph(ctx, req)
+		if err != nil {
+			predErr = fmt.Errorf("unable to query alice's graph: %v", err)
+			return false
+		}
+
+		numEdges = len(chanGraph.Edges)
+		if numEdges != 1 {
+			predErr = fmt.Errorf("expected to find 1 announced edge in "+
+				"the graph, found %d", numEdges)
+			return false
+		}
+		return true
+	}, time.Second*15)
+	if err != nil {
+		t.Fatalf("%v", predErr)
+	}
+
+	// The channel should now be announced. Check that Alice has 1 announced
+	// edge.
+	req.IncludeUnannounced = false
+	ctx, _ = context.WithTimeout(ctb, timeout)
+	chanGraph, err = net.Alice.DescribeGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("unable to query alice's graph: %v", err)
+	}
+
+	numEdges = len(chanGraph.Edges)
+	if numEdges != 1 {
+		t.Fatalf("expected to find 1 announced edge in the graph, found %d",
+			numEdges)
+	}
+
+	// Close the channel used during the test.
+	ctx, _ = context.WithTimeout(ctb, timeout)
+	closeChannelAndAssert(ctx, t, net, net.Alice, fundingChanPoint, false)
+}
+
 // testPrivateChannels tests that a private channel can be used for
 // routing by the two endpoints of the channel, but is not known by
 // the rest of the nodes in the graph.
@@ -4432,8 +4548,10 @@ func testPrivateChannels(net *lntest.NetworkHarness, t *harnessTest) {
 	// nodes know about. Carol and Alice should know about 4, while
 	// Bob and Dave should only know about 3, since one channel is
 	// private.
-	numChannels := func(node *lntest.HarnessNode) int {
-		req := &lnrpc.ChannelGraphRequest{}
+	numChannels := func(node *lntest.HarnessNode, includeUnannounced bool) int {
+		req := &lnrpc.ChannelGraphRequest{
+			IncludeUnannounced: includeUnannounced,
+		}
 		ctxt, _ := context.WithTimeout(ctxb, timeout)
 		chanGraph, err := node.DescribeGraph(ctxt, req)
 		if err != nil {
@@ -4444,25 +4562,37 @@ func testPrivateChannels(net *lntest.NetworkHarness, t *harnessTest) {
 
 	var predErr error
 	err = lntest.WaitPredicate(func() bool {
-		aliceChans := numChannels(net.Alice)
+		aliceChans := numChannels(net.Alice, true)
 		if aliceChans != 4 {
 			predErr = fmt.Errorf("expected Alice to know 4 edges, "+
 				"had %v", aliceChans)
 			return false
 		}
-		bobChans := numChannels(net.Bob)
+		alicePubChans := numChannels(net.Alice, false)
+		if alicePubChans != 3 {
+			predErr = fmt.Errorf("expected Alice to know 3 public edges, "+
+				"had %v", alicePubChans)
+			return false
+		}
+		bobChans := numChannels(net.Bob, true)
 		if bobChans != 3 {
 			predErr = fmt.Errorf("expected Bob to know 3 edges, "+
 				"had %v", bobChans)
 			return false
 		}
-		carolChans := numChannels(carol)
+		carolChans := numChannels(carol, true)
 		if carolChans != 4 {
 			predErr = fmt.Errorf("expected Carol to know 4 edges, "+
 				"had %v", carolChans)
 			return false
 		}
-		daveChans := numChannels(dave)
+		carolPubChans := numChannels(carol, false)
+		if carolPubChans != 3 {
+			predErr = fmt.Errorf("expected Carol to know 3 public edges, "+
+				"had %v", carolPubChans)
+			return false
+		}
+		daveChans := numChannels(dave, true)
 		if daveChans != 3 {
 			predErr = fmt.Errorf("expected Dave to know 3 edges, "+
 				"had %v", daveChans)
@@ -4492,7 +4622,7 @@ func testInvoiceRoutingHints(net *lntest.NetworkHarness, t *harnessTest) {
 	timeout := time.Duration(15 * time.Second)
 	const chanAmt = btcutil.Amount(100000)
 
-	// Throughout this test, we'll be opening a channel betwen Alice and
+	// Throughout this test, we'll be opening a channel between Alice and
 	// several other parties.
 	//
 	// First, we'll create a private channel between Alice and Bob. This
@@ -4525,6 +4655,23 @@ func testInvoiceRoutingHints(net *lntest.NetworkHarness, t *harnessTest) {
 	ctxt, _ = context.WithTimeout(ctxb, timeout)
 	chanPointCarol := openChannelAndAssert(
 		ctxt, t, net, net.Alice, carol,
+		lntest.OpenChannelParams{
+			Amt:     chanAmt,
+			PushAmt: chanAmt / 2,
+		},
+	)
+
+	// We'll also create a public channel between Bob and Carol to ensure
+	// that Bob gets selected as the only routing hint. We do this as
+	// we should only include routing hints for nodes that are publicly
+	// advertised, otherwise we'd end up leaking information about nodes
+	// that wish to stay unadvertised.
+	if err := net.ConnectNodes(ctxb, net.Bob, carol); err != nil {
+		t.Fatalf("unable to connect alice to carol: %v", err)
+	}
+	ctxt, _ = context.WithTimeout(ctxb, timeout)
+	chanPointBobCarol := openChannelAndAssert(
+		ctxt, t, net, net.Bob, carol,
 		lntest.OpenChannelParams{
 			Amt:     chanAmt,
 			PushAmt: chanAmt / 2,
@@ -4577,7 +4724,8 @@ func testInvoiceRoutingHints(net *lntest.NetworkHarness, t *harnessTest) {
 	// Make sure all the channels have been opened.
 	nodeNames := []string{"bob", "carol", "dave", "eve"}
 	aliceChans := []*lnrpc.ChannelPoint{
-		chanPointBob, chanPointCarol, chanPointDave, chanPointEve,
+		chanPointBob, chanPointCarol, chanPointBobCarol, chanPointDave,
+		chanPointEve,
 	}
 	for i, chanPoint := range aliceChans {
 		ctxt, _ := context.WithTimeout(ctxb, timeout)
@@ -4668,6 +4816,8 @@ func testInvoiceRoutingHints(net *lntest.NetworkHarness, t *harnessTest) {
 	closeChannelAndAssert(ctxt, t, net, net.Alice, chanPointBob, false)
 	ctxt, _ = context.WithTimeout(ctxb, timeout)
 	closeChannelAndAssert(ctxt, t, net, net.Alice, chanPointCarol, false)
+	ctxt, _ = context.WithTimeout(ctxb, timeout)
+	closeChannelAndAssert(ctxt, t, net, net.Bob, chanPointBobCarol, false)
 	ctxt, _ = context.WithTimeout(ctxb, timeout)
 	closeChannelAndAssert(ctxt, t, net, net.Alice, chanPointDave, false)
 
@@ -5781,7 +5931,9 @@ func testGarbageCollectLinkNodes(net *lntest.NetworkHarness, t *harnessTest) {
 
 	// Finally, we'll ensure that Bob and Carol no longer show in Alice's
 	// channel graph.
-	describeGraphReq := &lnrpc.ChannelGraphRequest{}
+	describeGraphReq := &lnrpc.ChannelGraphRequest{
+		IncludeUnannounced: true,
+	}
 	channelGraph, err := net.Alice.DescribeGraph(ctxb, describeGraphReq)
 	if err != nil {
 		t.Fatalf("unable to query for alice's channel graph: %v", err)
@@ -7525,20 +7677,16 @@ func testGraphTopologyNotifications(net *lntest.NetworkHarness, t *harnessTest) 
 	// The channel opening above should have triggered a few notifications
 	// sent to the notification client. We'll expect two channel updates,
 	// and two node announcements.
-	const numExpectedUpdates = 4
-	for i := 0; i < numExpectedUpdates; i++ {
+	var numChannelUpds int
+	var numNodeAnns int
+	for numChannelUpds < 2 && numNodeAnns < 2 {
 		select {
 		// Ensure that a new update for both created edges is properly
 		// dispatched to our registered client.
 		case graphUpdate := <-graphSub.updateChan:
-
-			if len(graphUpdate.ChannelUpdates) > 0 {
-				chanUpdate := graphUpdate.ChannelUpdates[0]
-				if chanUpdate.Capacity != int64(chanAmt) {
-					t.Fatalf("channel capacities mismatch:"+
-						" expected %v, got %v", chanAmt,
-						btcutil.Amount(chanUpdate.Capacity))
-				}
+			// Process all channel updates prsented in this update
+			// message.
+			for _, chanUpdate := range graphUpdate.ChannelUpdates {
 				switch chanUpdate.AdvertisingNode {
 				case net.Alice.PubKeyStr:
 				case net.Bob.PubKeyStr:
@@ -7553,10 +7701,16 @@ func testGraphTopologyNotifications(net *lntest.NetworkHarness, t *harnessTest) 
 					t.Fatalf("unknown connecting node: %v",
 						chanUpdate.ConnectingNode)
 				}
+
+				if chanUpdate.Capacity != int64(chanAmt) {
+					t.Fatalf("channel capacities mismatch:"+
+						" expected %v, got %v", chanAmt,
+						btcutil.Amount(chanUpdate.Capacity))
+				}
+				numChannelUpds++
 			}
 
-			if len(graphUpdate.NodeUpdates) > 0 {
-				nodeUpdate := graphUpdate.NodeUpdates[0]
+			for _, nodeUpdate := range graphUpdate.NodeUpdates {
 				switch nodeUpdate.IdentityKey {
 				case net.Alice.PubKeyStr:
 				case net.Bob.PubKeyStr:
@@ -7564,11 +7718,14 @@ func testGraphTopologyNotifications(net *lntest.NetworkHarness, t *harnessTest) 
 					t.Fatalf("unknown node: %v",
 						nodeUpdate.IdentityKey)
 				}
+				numNodeAnns++
 			}
 		case err := <-graphSub.errChan:
 			t.Fatalf("unable to recv graph update: %v", err)
 		case <-time.After(time.Second * 10):
-			t.Fatalf("timeout waiting for graph notification %v", i)
+			t.Fatalf("timeout waiting for graph notifications, "+
+				"only received %d/2 chanupds and %d/2 nodeanns",
+				numChannelUpds, numNodeAnns)
 		}
 	}
 
@@ -7667,11 +7824,12 @@ out:
 
 	// We should receive an update advertising the newly connected node,
 	// Bob's new node announcement, and the channel between Bob and Carol.
-	for i := 0; i < 3; i++ {
+	numNodeAnns = 0
+	numChannelUpds = 0
+	for numChannelUpds < 2 && numNodeAnns < 1 {
 		select {
 		case graphUpdate := <-graphSub.updateChan:
-			if len(graphUpdate.NodeUpdates) > 0 {
-				nodeUpdate := graphUpdate.NodeUpdates[0]
+			for _, nodeUpdate := range graphUpdate.NodeUpdates {
 				switch nodeUpdate.IdentityKey {
 				case carol.PubKeyStr:
 				case net.Bob.PubKeyStr:
@@ -7679,15 +7837,10 @@ out:
 					t.Fatalf("unknown node update pubey: %v",
 						nodeUpdate.IdentityKey)
 				}
+				numNodeAnns++
 			}
 
-			if len(graphUpdate.ChannelUpdates) > 0 {
-				chanUpdate := graphUpdate.ChannelUpdates[0]
-				if chanUpdate.Capacity != int64(chanAmt) {
-					t.Fatalf("channel capacities mismatch:"+
-						" expected %v, got %v", chanAmt,
-						btcutil.Amount(chanUpdate.Capacity))
-				}
+			for _, chanUpdate := range graphUpdate.ChannelUpdates {
 				switch chanUpdate.AdvertisingNode {
 				case carol.PubKeyStr:
 				case net.Bob.PubKeyStr:
@@ -7702,11 +7855,20 @@ out:
 					t.Fatalf("unknown connecting node: %v",
 						chanUpdate.ConnectingNode)
 				}
+
+				if chanUpdate.Capacity != int64(chanAmt) {
+					t.Fatalf("channel capacities mismatch:"+
+						" expected %v, got %v", chanAmt,
+						btcutil.Amount(chanUpdate.Capacity))
+				}
+				numChannelUpds++
 			}
 		case err := <-graphSub.errChan:
 			t.Fatalf("unable to recv graph update: %v", err)
 		case <-time.After(time.Second * 10):
-			t.Fatalf("timeout waiting for graph notification %v", i)
+			t.Fatalf("timeout waiting for graph notifications, "+
+				"only received %d/2 chanupds and %d/2 nodeanns",
+				numChannelUpds, numNodeAnns)
 		}
 	}
 
@@ -7726,6 +7888,8 @@ func testNodeAnnouncement(net *lntest.NetworkHarness, t *harnessTest) {
 	advertisedAddrs := []string{
 		"192.168.1.1:8333",
 		"[2001:db8:85a3:8d3:1319:8a2e:370:7348]:8337",
+		"bkb6azqggsaiskzi.onion:9735",
+		"fomvuglh6h6vcag73xo5t5gv56ombih3zr2xvplkpbfd7wrog4swjwid.onion:1234",
 	}
 
 	var lndArgs []string
@@ -9544,7 +9708,7 @@ func testMultiHopHtlcLocalChainClaim(net *lntest.NetworkHarness, t *harnessTest)
 	assertTxInBlock(t, block, commitHash)
 
 	// After the force close transacion is mined, Carol should broadcast
-	// her second level HTLC transacion. Bob will braodcast a sweep tx to
+	// her second level HTLC transacion. Bob will broadcast a sweep tx to
 	// sweep his output in the channel with Carol. He can do this
 	// immediately, as the output is not timelocked since Carol was the one
 	// force closing.
@@ -9872,7 +10036,7 @@ func testMultiHopHtlcRemoteChainClaim(net *lntest.NetworkHarness, t *harnessTest
 	assertTxInBlock(t, block, commitHash)
 
 	// After the force close transacion is mined, Carol should broadcast
-	// her second level HTLC transacion. Bob will braodcast a sweep tx to
+	// her second level HTLC transacion. Bob will broadcast a sweep tx to
 	// sweep his output in the channel with Carol. He can do this
 	// immediately, as the output is not timelocked since Carol was the one
 	// force closing.
@@ -11494,7 +11658,7 @@ func testQueryRoutes(net *lntest.NetworkHarness, t *harnessTest) {
 		}
 
 		// For all hops except the last, we check that fee equals feePerHop
-		// and amount to foward deducts feePerHop on each hop.
+		// and amount to forward deducts feePerHop on each hop.
 		expectedAmtToForwardMSat := expectedTotalAmtMSat
 		for j, hop := range route.Hops[:len(route.Hops)-1] {
 			expectedAmtToForwardMSat -= feePerHopMSat
@@ -11520,7 +11684,7 @@ func testQueryRoutes(net *lntest.NetworkHarness, t *harnessTest) {
 					i, j, expectedAmtToForwardMSat, hop.AmtToForwardMsat)
 			}
 		}
-		// Last hop should have zero fee and amount to foward should equal
+		// Last hop should have zero fee and amount to forward should equal
 		// payment amount.
 		hop := route.Hops[len(route.Hops)-1]
 
@@ -11671,7 +11835,7 @@ func testRouteFeeCutoff(net *lntest.NetworkHarness, t *harnessTest) {
 		}
 	}
 
-	// The payments should only be succesful across the route:
+	// The payments should only be successful across the route:
 	//	Alice -> Bob -> Dave
 	// Therefore, we'll update the fee policy on Carol's side for the
 	// channel between her and Dave to invalidate the route:
@@ -12183,6 +12347,10 @@ var testsCases = []*testCase{
 	{
 		name: "send to route error propagation",
 		test: testSendToRouteErrorPropagation,
+	},
+	{
+		name: "unannounced channels",
+		test: testUnannouncedChannels,
 	},
 	{
 		name: "private channels",

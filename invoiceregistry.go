@@ -11,9 +11,9 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcutil"
 	"github.com/davecgh/go-spew/spew"
-	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/lnwire"
+	"github.com/wakiyamap/lnd/queue"
 	"github.com/wakiyamap/lnd/zpay32"
 )
 
@@ -415,7 +415,7 @@ type invoiceSubscription struct {
 	// are sent out.
 	settleIndex uint64
 
-	ntfnQueue *chainntnfs.ConcurrentQueue
+	ntfnQueue *queue.ConcurrentQueue
 
 	id uint32
 
@@ -456,7 +456,7 @@ func (i *invoiceRegistry) SubscribeNotifications(addIndex, settleIndex uint64) *
 		addIndex:        addIndex,
 		settleIndex:     settleIndex,
 		inv:             i,
-		ntfnQueue:       chainntnfs.NewConcurrentQueue(20),
+		ntfnQueue:       queue.NewConcurrentQueue(20),
 		cancelChan:      make(chan struct{}),
 	}
 	client.ntfnQueue.Start()

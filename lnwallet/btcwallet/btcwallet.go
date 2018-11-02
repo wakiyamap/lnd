@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
@@ -218,7 +217,7 @@ func (b *BtcWallet) Stop() error {
 func (b *BtcWallet) ConfirmedBalance(confs int32) (btcutil.Amount, error) {
 	var balance btcutil.Amount
 
-	witnessOutputs, err := b.ListUnspentWitness(confs)
+	witnessOutputs, err := b.ListUnspentWitness(confs, math.MaxInt32)
 	if err != nil {
 		return 0, err
 	}
@@ -255,15 +254,12 @@ func (b *BtcWallet) NewAddress(t lnwallet.AddressType, change bool) (btcutil.Add
 	return b.wallet.NewAddress(defaultAccount, keyScope)
 }
 
-// GetPrivKey retrieves the underlying private key associated with the passed
-// address. If the we're unable to locate the proper private key, then a
-// non-nil error will be returned.
+// IsOurAddress checks if the passed address belongs to this wallet
 //
 // This is a part of the WalletController interface.
-func (b *BtcWallet) GetPrivKey(a btcutil.Address) (*btcec.PrivateKey, error) {
-	// Using the ID address, request the private key corresponding to the
-	// address from the wallet's address manager.
-	return b.wallet.PrivKeyForAddress(a)
+func (b *BtcWallet) IsOurAddress(a btcutil.Address) bool {
+	result, err := b.wallet.HaveAddress(a)
+	return result && (err == nil)
 }
 
 // SendOutputs funds, signs, and broadcasts a Bitcoin transaction paying out to
@@ -303,9 +299,9 @@ func (b *BtcWallet) UnlockOutpoint(o wire.OutPoint) {
 // controls which pay to witness programs either directly or indirectly.
 //
 // This is a part of the WalletController interface.
-func (b *BtcWallet) ListUnspentWitness(minConfs int32) ([]*lnwallet.Utxo, error) {
+func (b *BtcWallet) ListUnspentWitness(minConfs, maxConfs int32) (
+	[]*lnwallet.Utxo, error) {
 	// First, grab all the unfiltered currently unspent outputs.
-	maxConfs := int32(math.MaxInt32)
 	unspentOutputs, err := b.wallet.ListUnspent(minConfs, maxConfs, nil)
 	if err != nil {
 		return nil, err
@@ -752,18 +748,6 @@ func (b *BtcWallet) IsSynced() (bool, int64, error) {
 	minus24Hours := time.Now().Add(-2 * time.Hour)
 	if blockHeader.Timestamp.Before(minus24Hours) {
 		return false, bestTimestamp, nil
-	}
-
-	// If this is neutrino, then we'll also want to wait until the set of
-	// filter headers also match
-	if neutrinoNode, ok := b.chain.(*chain.NeutrinoClient); ok {
-		filterDB := neutrinoNode.CS.RegFilterHeaders
-		_, filterHeaderTip, err := filterDB.ChainTip()
-		if err != nil {
-			return false, 0, err
-		}
-
-		return filterHeaderTip == uint32(bestHeight), bestTimestamp, nil
 	}
 
 	return true, bestTimestamp, nil

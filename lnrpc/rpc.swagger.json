@@ -421,6 +421,16 @@
             }
           }
         },
+        "parameters": [
+          {
+            "name": "include_unannounced",
+            "description": "*\nWhether unannounced channels are included in the response or not. If set,\nunannounced channels are included. Unannounced channels are both private\nchannels, and public channels that are not yet announced to the network.",
+            "in": "query",
+            "required": false,
+            "type": "boolean",
+            "format": "boolean"
+          }
+        ],
         "tags": [
           "Lightning"
         ]
@@ -697,7 +707,7 @@
     },
     "/v1/invoices/subscribe": {
       "get": {
-        "summary": "*\nSubscribeInvoices returns a uni-directional stream (sever -\u003e client) for\nnotifying the client of newly added/settled invoices. The caller can\noptionally specify the add_index and/or the settle_index. If the add_index\nis specified, then we'll first start by sending add invoice events for all\ninvoices with an add_index greater than the specified value.  If the\nsettle_index is specified, the next, we'll send out all settle events for\ninvoices with a settle_index greater than the specified value.  One or both\nof these fields can be set. If no fields are set, then we'll only send out\nthe latest add/settle events.",
+        "summary": "*\nSubscribeInvoices returns a uni-directional stream (server -\u003e client) for\nnotifying the client of newly added/settled invoices. The caller can\noptionally specify the add_index and/or the settle_index. If the add_index\nis specified, then we'll first start by sending add invoice events for all\ninvoices with an add_index greater than the specified value.  If the\nsettle_index is specified, the next, we'll send out all settle events for\ninvoices with a settle_index greater than the specified value.  One or both\nof these fields can be set. If no fields are set, then we'll only send out\nthe latest add/settle events.",
         "operationId": "SubscribeInvoices",
         "responses": {
           "200": {
@@ -732,8 +742,8 @@
     },
     "/v1/newaddress": {
       "get": {
-        "summary": "*\nNewWitnessAddress creates a new witness address under control of the local wallet.",
-        "operationId": "NewWitnessAddress",
+        "summary": "* lncli: `newaddress`\nNewAddress creates a new address under control of the local wallet.",
+        "operationId": "NewAddress",
         "responses": {
           "200": {
             "description": "",
@@ -742,6 +752,20 @@
             }
           }
         },
+        "parameters": [
+          {
+            "name": "type",
+            "description": "/ The address type.",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "enum": [
+              "WITNESS_PUBKEY_HASH",
+              "NESTED_PUBKEY_HASH"
+            ],
+            "default": "WITNESS_PUBKEY_HASH"
+          }
+        ],
         "tags": [
           "Lightning"
         ]
@@ -2225,6 +2249,11 @@
           "type": "integer",
           "format": "int32",
           "description": "/ The minimum number of confirmations each one of your outputs used for the funding transaction must satisfy."
+        },
+        "spend_unconfirmed": {
+          "type": "boolean",
+          "format": "boolean",
+          "description": "/ Whether unconfirmed outputs should be used as inputs for the funding transaction."
         }
       }
     },
@@ -2294,7 +2323,7 @@
         "value": {
           "type": "string",
           "format": "int64",
-          "title": "/ The value of the payment in satoshis"
+          "description": "/ Deprecated, use value_sat or value_msat."
         },
         "creation_date": {
           "type": "string",
@@ -2316,6 +2345,16 @@
         "payment_preimage": {
           "type": "string",
           "title": "/ The payment preimage"
+        },
+        "value_sat": {
+          "type": "string",
+          "format": "int64",
+          "title": "/ The value of the payment in satoshis"
+        },
+        "value_msat": {
+          "type": "string",
+          "format": "int64",
+          "title": "/ The value of the payment in milli-satoshis"
         }
       }
     },
@@ -2706,7 +2745,7 @@
         "amount": {
           "type": "string",
           "format": "int64",
-          "title": "/ The transaction ammount, denominated in satoshis"
+          "title": "/ The transaction amount, denominated in satoshis"
         },
         "num_confirmations": {
           "type": "integer",
