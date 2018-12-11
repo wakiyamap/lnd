@@ -24,6 +24,7 @@ import (
 	"github.com/wakiyamap/lnd/build"
 	"github.com/wakiyamap/lnd/htlcswitch/hodl"
 	"github.com/wakiyamap/lnd/lncfg"
+	"github.com/wakiyamap/lnd/lnrpc/signrpc"
 	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/wakiyamap/lnd/routing"
 	"github.com/wakiyamap/lnd/tor"
@@ -52,6 +53,7 @@ const (
 	defaultInactiveChanTimeout = 20 * time.Minute
 	defaultMaxLogFiles         = 3
 	defaultMaxLogFileSize      = 10
+	defaultMaxBackoff          = time.Hour
 
 	defaultTorSOCKSPort            = 9050
 	defaultTorDNSHost              = "soa.nodes.lightning.directory"
@@ -193,8 +195,9 @@ type config struct {
 	RESTListeners    []net.Addr
 	Listeners        []net.Addr
 	ExternalIPs      []net.Addr
-	DisableListen    bool `long:"nolisten" description:"Disable listening for incoming peer connections"`
-	NAT              bool `long:"nat" description:"Toggle NAT traversal support (using either UPnP or NAT-PMP) to automatically advertise your external IP address to the network -- NOTE this does not support devices behind multiple NATs"`
+	DisableListen    bool          `long:"nolisten" description:"Disable listening for incoming peer connections"`
+	NAT              bool          `long:"nat" description:"Toggle NAT traversal support (using either UPnP or NAT-PMP) to automatically advertise your external IP address to the network -- NOTE this does not support devices behind multiple NATs"`
+	MaxBackoff       time.Duration `long:"maxbackoff" description:"Longest backoff when reconnecting to persistent peers. Valid time units are {s, m, h}."`
 
 	DebugLevel string `short:"d" long:"debuglevel" description:"Logging level for all subsystems {trace, debug, info, warn, error, critical} -- You may also specify <subsystem>=<level>,<subsystem2>=<level>,... to set the log level for individual subsystems -- Use show to list available subsystems"`
 
@@ -220,6 +223,8 @@ type config struct {
 
 	Tor *torConfig `group:"Tor" namespace:"tor"`
 
+	SubRPCServers *subRPCServerConfigs `group:"subrpc"`
+
 	Hodl *hodl.Config `group:"hodl" namespace:"hodl"`
 
 	NoNetBootstrap bool `long:"nobootstrap" description:"If true, then automatic network bootstrapping will not be attempted."`
@@ -234,6 +239,8 @@ type config struct {
 	MinChanSize int64  `long:"minchansize" description:"The smallest channel size (in satoshis) that we should accept. Incoming channels smaller than this will be rejected"`
 
 	NoChanUpdates bool `long:"nochanupdates" description:"If specified, lnd will not request real-time channel updates from connected peers. This option should be used by routing nodes to save bandwidth."`
+
+	RejectPush bool `long:"rejectpush" description:"If true, lnd will not accept channel opening requests with non-zero push amounts. This should prevent accidental pushes to merchant nodes."`
 
 	net tor.Net
 
@@ -293,6 +300,10 @@ func loadConfig() (*config, error) {
 		},
 		MaxPendingChannels: defaultMaxPendingChannels,
 		NoSeedBackup:       defaultNoSeedBackup,
+		MaxBackoff:         defaultMaxBackoff,
+		SubRPCServers: &subRPCServerConfigs{
+			SignRPC: &signrpc.Config{},
+		},
 		Autopilot: &autoPilotConfig{
 			MaxChannels:    5,
 			Allocation:     0.6,
@@ -933,8 +944,8 @@ func loadConfig() (*config, error) {
 		}
 	}
 
-	// Finally, ensure that we are only listening on localhost if Tor
-	// inbound support is enabled.
+	// Ensure that we are only listening on localhost if Tor inbound support
+	// is enabled.
 	if cfg.Tor.V2 || cfg.Tor.V3 {
 		for _, addr := range cfg.Listeners {
 			if lncfg.IsLoopback(addr.String()) {
@@ -945,6 +956,14 @@ func loadConfig() (*config, error) {
 				"on localhost when running with Tor inbound " +
 				"support enabled")
 		}
+	}
+
+	// Finally, ensure that the user's color is correctly formatted,
+	// otherwise the server will not be able to start after the unlocking
+	// the wallet.
+	_, err = parseHexColor(cfg.Color)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to parse node color: %v", err)
 	}
 
 	// Warn about missing config file only after all other configuration is

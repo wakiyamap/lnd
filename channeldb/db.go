@@ -12,6 +12,7 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	"github.com/coreos/bbolt"
 	"github.com/go-errors/errors"
+	"github.com/wakiyamap/lnd/lnwire"
 )
 
 const (
@@ -22,7 +23,7 @@ const (
 // migration is a function which takes a prior outdated version of the database
 // instances and mutates the key/bucket structure to arrive at a more
 // up-to-date version of the database.
-type migration func(tx *bolt.Tx) error
+type migration func(tx *bbolt.Tx) error
 
 type version struct {
 	number    uint32
@@ -80,6 +81,13 @@ var (
 			number:    6,
 			migration: migratePruneEdgeUpdateIndex,
 		},
+		{
+			// The DB version that migrates the ChannelCloseSummary
+			// to a format where optional fields are indicated with
+			// boolean flags.
+			number:    7,
+			migration: migrateOptionalChannelCloseSummaryFields,
+		},
 	}
 
 	// Big endian is the preferred byte order, due to cursor scans over
@@ -95,7 +103,7 @@ var bufPool = &sync.Pool{
 // information related to nodes, routing data, open/closed channels, fee
 // schedules, and reputation data.
 type DB struct {
-	*bolt.DB
+	*bbolt.DB
 	dbPath string
 }
 
@@ -110,7 +118,7 @@ func Open(dbPath string) (*DB, error) {
 		}
 	}
 
-	bdb, err := bolt.Open(path, dbFilePermission, nil)
+	bdb, err := bbolt.Open(path, dbFilePermission, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -138,41 +146,41 @@ func (d *DB) Path() string {
 // database. The deletion is done in a single transaction, therefore this
 // operation is fully atomic.
 func (d *DB) Wipe() error {
-	return d.Update(func(tx *bolt.Tx) error {
+	return d.Update(func(tx *bbolt.Tx) error {
 		err := tx.DeleteBucket(openChannelBucket)
-		if err != nil && err != bolt.ErrBucketNotFound {
+		if err != nil && err != bbolt.ErrBucketNotFound {
 			return err
 		}
 
 		err = tx.DeleteBucket(closedChannelBucket)
-		if err != nil && err != bolt.ErrBucketNotFound {
+		if err != nil && err != bbolt.ErrBucketNotFound {
 			return err
 		}
 
 		err = tx.DeleteBucket(invoiceBucket)
-		if err != nil && err != bolt.ErrBucketNotFound {
+		if err != nil && err != bbolt.ErrBucketNotFound {
 			return err
 		}
 
 		err = tx.DeleteBucket(nodeInfoBucket)
-		if err != nil && err != bolt.ErrBucketNotFound {
+		if err != nil && err != bbolt.ErrBucketNotFound {
 			return err
 		}
 
 		err = tx.DeleteBucket(nodeBucket)
-		if err != nil && err != bolt.ErrBucketNotFound {
+		if err != nil && err != bbolt.ErrBucketNotFound {
 			return err
 		}
 		err = tx.DeleteBucket(edgeBucket)
-		if err != nil && err != bolt.ErrBucketNotFound {
+		if err != nil && err != bbolt.ErrBucketNotFound {
 			return err
 		}
 		err = tx.DeleteBucket(edgeIndexBucket)
-		if err != nil && err != bolt.ErrBucketNotFound {
+		if err != nil && err != bbolt.ErrBucketNotFound {
 			return err
 		}
 		err = tx.DeleteBucket(graphMetaBucket)
-		if err != nil && err != bolt.ErrBucketNotFound {
+		if err != nil && err != bbolt.ErrBucketNotFound {
 			return err
 		}
 
@@ -192,12 +200,12 @@ func createChannelDB(dbPath string) error {
 	}
 
 	path := filepath.Join(dbPath, dbName)
-	bdb, err := bolt.Open(path, dbFilePermission, nil)
+	bdb, err := bbolt.Open(path, dbFilePermission, nil)
 	if err != nil {
 		return err
 	}
 
-	err = bdb.Update(func(tx *bolt.Tx) error {
+	err = bdb.Update(func(tx *bbolt.Tx) error {
 		if _, err := tx.CreateBucket(openChannelBucket); err != nil {
 			return err
 		}
@@ -294,7 +302,7 @@ func fileExists(path string) bool {
 // zero-length slice is returned.
 func (d *DB) FetchOpenChannels(nodeID *btcec.PublicKey) ([]*OpenChannel, error) {
 	var channels []*OpenChannel
-	err := d.View(func(tx *bolt.Tx) error {
+	err := d.View(func(tx *bbolt.Tx) error {
 		var err error
 		channels, err = d.fetchOpenChannels(tx, nodeID)
 		return err
@@ -307,7 +315,7 @@ func (d *DB) FetchOpenChannels(nodeID *btcec.PublicKey) ([]*OpenChannel, error) 
 // stored currently active/open channels associated with the target nodeID. In
 // the case that no active channels are known to have been created with this
 // node, then a zero-length slice is returned.
-func (d *DB) fetchOpenChannels(tx *bolt.Tx,
+func (d *DB) fetchOpenChannels(tx *bbolt.Tx,
 	nodeID *btcec.PublicKey) ([]*OpenChannel, error) {
 
 	// Get the bucket dedicated to storing the metadata for open channels.
@@ -360,7 +368,7 @@ func (d *DB) fetchOpenChannels(tx *bolt.Tx,
 // fetchNodeChannels retrieves all active channels from the target chainBucket
 // which is under a node's dedicated channel bucket. This function is typically
 // used to fetch all the active channels related to a particular node.
-func (d *DB) fetchNodeChannels(chainBucket *bolt.Bucket) ([]*OpenChannel, error) {
+func (d *DB) fetchNodeChannels(chainBucket *bbolt.Bucket) ([]*OpenChannel, error) {
 
 	var channels []*OpenChannel
 
@@ -456,7 +464,7 @@ func (d *DB) FetchWaitingCloseChannels() ([]*OpenChannel, error) {
 func fetchChannels(d *DB, pending, waitingClose bool) ([]*OpenChannel, error) {
 	var channels []*OpenChannel
 
-	err := d.View(func(tx *bolt.Tx) error {
+	err := d.View(func(tx *bbolt.Tx) error {
 		// Get the bucket dedicated to storing the metadata for open
 		// channels.
 		openChanBucket := tx.Bucket(openChannelBucket)
@@ -543,7 +551,7 @@ func fetchChannels(d *DB, pending, waitingClose bool) ([]*OpenChannel, error) {
 func (d *DB) FetchClosedChannels(pendingOnly bool) ([]*ChannelCloseSummary, error) {
 	var chanSummaries []*ChannelCloseSummary
 
-	if err := d.View(func(tx *bolt.Tx) error {
+	if err := d.View(func(tx *bbolt.Tx) error {
 		closeBucket := tx.Bucket(closedChannelBucket)
 		if closeBucket == nil {
 			return ErrNoClosedChannels
@@ -581,7 +589,7 @@ var ErrClosedChannelNotFound = errors.New("unable to find closed channel summary
 // point of the channel in question.
 func (d *DB) FetchClosedChannel(chanID *wire.OutPoint) (*ChannelCloseSummary, error) {
 	var chanSummary *ChannelCloseSummary
-	if err := d.View(func(tx *bolt.Tx) error {
+	if err := d.View(func(tx *bbolt.Tx) error {
 		closeBucket := tx.Bucket(closedChannelBucket)
 		if closeBucket == nil {
 			return ErrClosedChannelNotFound
@@ -609,13 +617,61 @@ func (d *DB) FetchClosedChannel(chanID *wire.OutPoint) (*ChannelCloseSummary, er
 	return chanSummary, nil
 }
 
+// FetchClosedChannelForID queries for a channel close summary using the
+// channel ID of the channel in question.
+func (d *DB) FetchClosedChannelForID(cid lnwire.ChannelID) (
+	*ChannelCloseSummary, error) {
+
+	var chanSummary *ChannelCloseSummary
+	if err := d.View(func(tx *bbolt.Tx) error {
+		closeBucket := tx.Bucket(closedChannelBucket)
+		if closeBucket == nil {
+			return ErrClosedChannelNotFound
+		}
+
+		// The first 30 bytes of the channel ID and outpoint will be
+		// equal.
+		cursor := closeBucket.Cursor()
+		op, c := cursor.Seek(cid[:30])
+
+		// We scan over all possible candidates for this channel ID.
+		for ; op != nil && bytes.Compare(cid[:30], op[:30]) <= 0; op, c = cursor.Next() {
+			var outPoint wire.OutPoint
+			err := readOutpoint(bytes.NewReader(op), &outPoint)
+			if err != nil {
+				return err
+			}
+
+			// If the found outpoint does not correspond to this
+			// channel ID, we continue.
+			if !cid.IsChanPoint(&outPoint) {
+				continue
+			}
+
+			// Deserialize the close summary and return.
+			r := bytes.NewReader(c)
+			chanSummary, err = deserializeCloseChannelSummary(r)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		}
+		return ErrClosedChannelNotFound
+	}); err != nil {
+		return nil, err
+	}
+
+	return chanSummary, nil
+}
+
 // MarkChanFullyClosed marks a channel as fully closed within the database. A
 // channel should be marked as fully closed if the channel was initially
 // cooperatively closed and it's reached a single confirmation, or after all
 // the pending funds in a channel that has been forcibly closed have been
 // swept.
 func (d *DB) MarkChanFullyClosed(chanPoint *wire.OutPoint) error {
-	return d.Update(func(tx *bolt.Tx) error {
+	return d.Update(func(tx *bbolt.Tx) error {
 		var b bytes.Buffer
 		if err := writeOutpoint(&b, chanPoint); err != nil {
 			return err
@@ -668,7 +724,7 @@ func (d *DB) MarkChanFullyClosed(chanPoint *wire.OutPoint) error {
 // pruneLinkNode determines whether we should garbage collect a link node from
 // the database due to no longer having any open channels with it. If there are
 // any left, then this acts as a no-op.
-func (d *DB) pruneLinkNode(tx *bolt.Tx, remotePub *btcec.PublicKey) error {
+func (d *DB) pruneLinkNode(tx *bbolt.Tx, remotePub *btcec.PublicKey) error {
 	openChannels, err := d.fetchOpenChannels(tx, remotePub)
 	if err != nil {
 		return fmt.Errorf("unable to fetch open channels for peer %x: "+
@@ -688,7 +744,7 @@ func (d *DB) pruneLinkNode(tx *bolt.Tx, remotePub *btcec.PublicKey) error {
 // PruneLinkNodes attempts to prune all link nodes found within the databse with
 // whom we no longer have any open channels with.
 func (d *DB) PruneLinkNodes() error {
-	return d.Update(func(tx *bolt.Tx) error {
+	return d.Update(func(tx *bbolt.Tx) error {
 		linkNodes, err := d.fetchAllLinkNodes(tx)
 		if err != nil {
 			return err
@@ -747,7 +803,7 @@ func (d *DB) syncVersions(versions []version) error {
 	migrations, migrationVersions := getMigrationsToApply(
 		versions, meta.DbVersionNumber,
 	)
-	return d.Update(func(tx *bolt.Tx) error {
+	return d.Update(func(tx *bbolt.Tx) error {
 		for i, migration := range migrations {
 			if migration == nil {
 				continue

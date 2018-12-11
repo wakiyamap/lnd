@@ -148,6 +148,38 @@
         ]
       }
     },
+    "/v1/channels/abandon/{channel_point.funding_txid_str}/{channel_point.output_index}": {
+      "delete": {
+        "summary": "* lncli: `abandonchannel`\nAbandonChannel removes all channel state from the database except for a\nclose summary. This method can be used to get rid of permanently unusable\nchannels due to bugs fixed in newer versions of lnd. Only available\nwhen in debug builds of lnd.",
+        "operationId": "AbandonChannel",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/lnrpcAbandonChannelResponse"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "channel_point.funding_txid_str",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "channel_point.output_index",
+            "in": "path",
+            "required": true,
+            "type": "integer",
+            "format": "int64"
+          }
+        ],
+        "tags": [
+          "Lightning"
+        ]
+      }
+    },
     "/v1/channels/closed": {
       "get": {
         "summary": "* lncli: `closedchannels`\nClosedChannels returns a description of all the closed channels that \nthis node was a participant in.",
@@ -282,13 +314,13 @@
     },
     "/v1/channels/{channel_point.funding_txid_str}/{channel_point.output_index}": {
       "delete": {
-        "summary": "* lncli: `abandonchannel`\nAbandonChannel removes all channel state from the database except for a\nclose summary. This method can be used to get rid of permanently unusable\nchannels due to bugs fixed in newer versions of lnd. Only available\nwhen in debug builds of lnd.",
-        "operationId": "AbandonChannel",
+        "summary": "* lncli: `closechannel`\nCloseChannel attempts to close an active channel identified by its channel\noutpoint (ChannelPoint). The actions of this method can additionally be\naugmented to attempt a force close after a timeout period in the case of an\ninactive peer. If a non-force close (cooperative closure) is requested,\nthen the user can specify either a target number of blocks until the\nclosure transaction is confirmed, or a manual fee rate. If neither are\nspecified, then a default lax, block confirmation target is used.",
+        "operationId": "CloseChannel",
         "responses": {
           "200": {
-            "description": "",
+            "description": "(streaming responses)",
             "schema": {
-              "$ref": "#/definitions/lnrpcAbandonChannelResponse"
+              "$ref": "#/definitions/lnrpcCloseStatusUpdate"
             }
           }
         },
@@ -895,6 +927,33 @@
         ]
       }
     },
+    "/v1/signmessage": {
+      "post": {
+        "summary": "* lncli: `signmessage`\nSignMessage signs a message with this node's private key. The returned\nsignature string is `zbase32` encoded and pubkey recoverable, meaning that\nonly the message digest and signature are needed for verification.",
+        "operationId": "SignMessage",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/lnrpcSignMessageResponse"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/lnrpcSignMessageRequest"
+            }
+          }
+        ],
+        "tags": [
+          "Lightning"
+        ]
+      }
+    },
     "/v1/switch": {
       "post": {
         "summary": "* lncli: `fwdinghistory`\nForwardingHistory allows the caller to query the htlcswitch for a record of\nall HTLC's forwarded within the target time range, and integer offset\nwithin that time range. If no time-range is specified, then the first chunk\nof the past 24 hrs of forwarding history are returned.",
@@ -989,6 +1048,33 @@
         ],
         "tags": [
           "WalletUnlocker"
+        ]
+      }
+    },
+    "/v1/verifymessage": {
+      "post": {
+        "summary": "* lncli: `verifymessage`\nVerifyMessage verifies a signature over a msg. The signature must be\nzbase32 encoded and signed by an active node in the resident node's\nchannel database. In addition to returning the validity of the signature,\nVerifyMessage also returns the recovered pubkey from the signature.",
+        "operationId": "VerifyMessage",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/lnrpcVerifyMessageResponse"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/lnrpcVerifyMessageRequest"
+            }
+          }
+        ],
+        "tags": [
+          "Lightning"
         ]
       }
     }
@@ -1759,6 +1845,11 @@
         "version": {
           "type": "string",
           "description": "/ The version of the LND software that the node is running."
+        },
+        "num_inactive_channels": {
+          "type": "integer",
+          "format": "int64",
+          "title": "/ Number of inactive channels"
         }
       }
     },
@@ -1837,6 +1928,10 @@
         "fee_msat": {
           "type": "string",
           "format": "int64"
+        },
+        "pub_key": {
+          "type": "string",
+          "description": "*\nAn optional public key of the hop. If the public key is given, the payment\ncan be executed without relying on a copy of the channel graph."
         }
       }
     },
@@ -2699,6 +2794,10 @@
         },
         "payment_route": {
           "$ref": "#/definitions/lnrpcRoute"
+        },
+        "payment_hash": {
+          "type": "string",
+          "format": "byte"
         }
       }
     },
@@ -2720,6 +2819,16 @@
             "$ref": "#/definitions/lnrpcRoute"
           },
           "description": "/ The set of routes that should be used to attempt to complete the payment."
+        }
+      }
+    },
+    "lnrpcSignMessageRequest": {
+      "type": "object",
+      "properties": {
+        "msg": {
+          "type": "string",
+          "format": "byte",
+          "title": "/ The message to be signed"
         }
       }
     },
@@ -2809,6 +2918,20 @@
     },
     "lnrpcUnlockWalletResponse": {
       "type": "object"
+    },
+    "lnrpcVerifyMessageRequest": {
+      "type": "object",
+      "properties": {
+        "msg": {
+          "type": "string",
+          "format": "byte",
+          "title": "/ The message over which the signature is to be verified"
+        },
+        "signature": {
+          "type": "string",
+          "title": "/ The signature to be verified over the given message"
+        }
+      }
     },
     "lnrpcVerifyMessageResponse": {
       "type": "object",

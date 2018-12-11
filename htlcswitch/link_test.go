@@ -22,6 +22,7 @@ import (
 	"github.com/coreos/bbolt"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-errors/errors"
+	"github.com/wakiyamap/lnd/build"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/contractcourt"
 	"github.com/wakiyamap/lnd/htlcswitch/hodl"
@@ -1758,6 +1759,9 @@ func updateState(batchTick chan time.Time, link *channelLink,
 // TODO(roasbeef): add sync hook into packet processing so can eliminate all
 // sleep in this test and the one below
 func TestChannelLinkBandwidthConsistency(t *testing.T) {
+	if !build.IsDevBuild() {
+		t.Fatalf("htlcswitch tests must be run with '-tags debug")
+	}
 	t.Parallel()
 
 	// TODO(roasbeef): replace manual bit twiddling with concept of
@@ -2693,6 +2697,10 @@ func TestChannelLinkTrimCircuitsPending(t *testing.T) {
 // TestChannelLinkTrimCircuitsNoCommit checks that the switch and link properly trim
 // circuits if the ADDs corresponding to open circuits are never committed.
 func TestChannelLinkTrimCircuitsNoCommit(t *testing.T) {
+	if !build.IsDevBuild() {
+		t.Fatalf("htlcswitch tests must be run with '-tags debug")
+	}
+
 	t.Parallel()
 
 	const (
@@ -4797,32 +4805,32 @@ type mockPackager struct {
 	failLoadFwdPkgs bool
 }
 
-func (*mockPackager) AddFwdPkg(tx *bolt.Tx, fwdPkg *channeldb.FwdPkg) error {
+func (*mockPackager) AddFwdPkg(tx *bbolt.Tx, fwdPkg *channeldb.FwdPkg) error {
 	return nil
 }
 
-func (*mockPackager) SetFwdFilter(tx *bolt.Tx, height uint64,
+func (*mockPackager) SetFwdFilter(tx *bbolt.Tx, height uint64,
 	fwdFilter *channeldb.PkgFilter) error {
 	return nil
 }
 
-func (*mockPackager) AckAddHtlcs(tx *bolt.Tx,
+func (*mockPackager) AckAddHtlcs(tx *bbolt.Tx,
 	addRefs ...channeldb.AddRef) error {
 	return nil
 }
 
-func (m *mockPackager) LoadFwdPkgs(tx *bolt.Tx) ([]*channeldb.FwdPkg, error) {
+func (m *mockPackager) LoadFwdPkgs(tx *bbolt.Tx) ([]*channeldb.FwdPkg, error) {
 	if m.failLoadFwdPkgs {
 		return nil, fmt.Errorf("failing LoadFwdPkgs")
 	}
 	return nil, nil
 }
 
-func (*mockPackager) RemovePkg(tx *bolt.Tx, height uint64) error {
+func (*mockPackager) RemovePkg(tx *bbolt.Tx, height uint64) error {
 	return nil
 }
 
-func (*mockPackager) AckSettleFails(tx *bolt.Tx,
+func (*mockPackager) AckSettleFails(tx *bbolt.Tx,
 	settleFailRefs ...channeldb.SettleFailRef) error {
 	return nil
 }

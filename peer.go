@@ -46,6 +46,9 @@ const (
 	// writeMessageTimeout is the timeout used when writing a message to peer.
 	writeMessageTimeout = 50 * time.Second
 
+	// handshakeTimeout is the timeout used when waiting for peer init message.
+	handshakeTimeout = 15 * time.Second
+
 	// outgoingQueueLen is the buffer size of the channel which houses
 	// messages to be sent across the wire, requested by objects outside
 	// this struct.
@@ -269,10 +272,10 @@ func (p *peer) Start() error {
 
 	select {
 	// In order to avoid blocking indefinitely, we'll give the other peer
-	// an upper timeout of 15 seconds to respond before we bail out early.
-	case <-time.After(time.Second * 15):
-		return fmt.Errorf("peer did not complete handshake within 5 " +
-			"seconds")
+	// an upper timeout to respond before we bail out early.
+	case <-time.After(handshakeTimeout):
+		return fmt.Errorf("peer did not complete handshake within %v",
+			handshakeTimeout)
 	case err := <-readErr:
 		if err != nil {
 			return fmt.Errorf("unable to read init msg: %v", err)
@@ -793,7 +796,7 @@ func (ms *msgStream) msgConsumer() {
 
 // AddMsg adds a new message to the msgStream. This function is safe for
 // concurrent access.
-func (ms *msgStream) AddMsg(msg lnwire.Message, quit chan struct{}) {
+func (ms *msgStream) AddMsg(msg lnwire.Message) {
 	// First, we'll attempt to receive from the producerSema struct. This
 	// acts as a sempahore to prevent us from indefinitely buffering
 	// incoming items from the wire. Either the msg queue isn't full, and
@@ -801,7 +804,7 @@ func (ms *msgStream) AddMsg(msg lnwire.Message, quit chan struct{}) {
 	// we're signalled to quit, or a slot is freed up.
 	select {
 	case <-ms.producerSema:
-	case <-quit:
+	case <-ms.peer.quit:
 		return
 	case <-ms.quit:
 		return
@@ -833,11 +836,11 @@ func newChanMsgStream(p *peer, cid lnwire.ChannelID) *msgStream {
 		fmt.Sprintf("Update stream for ChannelID(%x) exiting", cid[:]),
 		1000,
 		func(msg lnwire.Message) {
-			_, isChanSycMsg := msg.(*lnwire.ChannelReestablish)
+			_, isChanSyncMsg := msg.(*lnwire.ChannelReestablish)
 
 			// If this is the chanSync message, then we'll deliver
 			// it immediately to the active link.
-			if !isChanSycMsg {
+			if !isChanSyncMsg {
 				// We'll send a message to the funding manager
 				// and wait iff an active funding process for
 				// this channel hasn't yet completed.  We do
@@ -871,9 +874,36 @@ func newChanMsgStream(p *peer, cid lnwire.ChannelID) *msgStream {
 			// active goroutine dedicated to this channel.
 			if chanLink == nil {
 				link, err := p.server.htlcSwitch.GetLink(cid)
-				if err != nil {
-					peerLog.Errorf("recv'd update for unknown "+
-						"channel %v from %v", cid, p)
+				switch {
+
+				// If we failed to find the link in question,
+				// and the message received was a channel sync
+				// message, then this might be a peer trying to
+				// resync closed channel. In this case we'll
+				// try to resend our last channel sync message,
+				// such that the peer can recover funds from
+				// the closed channel.
+				case err != nil && isChanSyncMsg:
+					peerLog.Debugf("Unable to find "+
+						"link(%v) to handle channel "+
+						"sync, attempting to resend "+
+						"last ChanSync message", cid)
+
+					err := p.resendChanSyncMsg(cid)
+					if err != nil {
+						// TODO(halseth): send error to
+						// peer?
+						peerLog.Errorf(
+							"resend failed: %v",
+							err,
+						)
+					}
+					return
+
+				case err != nil:
+					peerLog.Errorf("recv'd update for "+
+						"unknown channel %v from %v: "+
+						"%v", cid, p, err)
 					return
 				}
 				chanLink = link
@@ -1019,7 +1049,7 @@ out:
 			// forward the error to all channels with this peer.
 			case msg.ChanID == lnwire.ConnectionWideID:
 				for chanID, chanStream := range chanMsgStreams {
-					chanStream.AddMsg(nextMsg, p.quit)
+					chanStream.AddMsg(nextMsg)
 
 					// Also marked this channel as failed,
 					// so we won't try to restart it on
@@ -1081,7 +1111,7 @@ out:
 			*lnwire.ReplyChannelRange,
 			*lnwire.ReplyShortChanIDsEnd:
 
-			discStream.AddMsg(msg, p.quit)
+			discStream.AddMsg(msg)
 
 		default:
 			peerLog.Errorf("unknown message %v received from peer "+
@@ -1104,7 +1134,7 @@ out:
 
 			// With the stream obtained, add the message to the
 			// stream so we can continue processing message.
-			chanStream.AddMsg(nextMsg, p.quit)
+			chanStream.AddMsg(nextMsg)
 		}
 
 		idleTimer.Reset(idleTimeout)
@@ -2138,6 +2168,35 @@ func (p *peer) sendInitMsg() error {
 	)
 
 	return p.writeMessage(msg)
+}
+
+// resendChanSyncMsg will attempt to find a channel sync message for the closed
+// channel and resend it to our peer.
+func (p *peer) resendChanSyncMsg(cid lnwire.ChannelID) error {
+	// Check if we have any channel sync messages stored for this channel.
+	c, err := p.server.chanDB.FetchClosedChannelForID(cid)
+	if err != nil {
+		return fmt.Errorf("unable to fetch channel sync messages for "+
+			"peer %v: %v", p, err)
+	}
+
+	if c.LastChanSyncMsg == nil {
+		return fmt.Errorf("no chan sync message stored for channel %v",
+			cid)
+	}
+
+	peerLog.Debugf("Re-sending channel sync message for channel %v to "+
+		"peer %v", cid, p)
+
+	if err := p.SendMessage(true, c.LastChanSyncMsg); err != nil {
+		return fmt.Errorf("Failed resending channel sync "+
+			"message to peer %v: %v", p, err)
+	}
+
+	peerLog.Debugf("Re-sent channel sync message for channel %v to peer "+
+		"%v", cid, p)
+
+	return nil
 }
 
 // SendMessage sends a variadic number of message to remote peer. The first

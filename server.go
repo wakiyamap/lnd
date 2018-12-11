@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"net"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -51,10 +52,6 @@ const (
 	// reconnecting to persistent peers.
 	defaultBackoff = time.Second
 
-	// maximumBackoff is the largest backoff we will permit when
-	// reattempting connections to persistent peers.
-	maximumBackoff = time.Hour
-
 	// defaultStableConnDuration is a floor under which all reconnection
 	// attempts will apply exponential randomized backoff. Connections
 	// durations exceeding this value will be eligible to have their
@@ -70,6 +67,10 @@ var (
 	// ErrServerShuttingDown indicates that the server is in the process of
 	// gracefully exiting.
 	ErrServerShuttingDown = errors.New("server is shutting down")
+
+	// validColorRegexp is a regexp that lets you check if a particular
+	// color string matches the standard hex color format #RRGGBB.
+	validColorRegexp = regexp.MustCompile("^#[A-Fa-f0-9]{6}$")
 )
 
 // server is the main server of the Lightning Network Daemon. The server houses
@@ -559,12 +560,16 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 		return nil, fmt.Errorf("can't create router: %v", err)
 	}
 
+	chanSeries := discovery.NewChanSeries(
+		s.chanDB.ChannelGraph(),
+	)
+
 	s.authGossiper, err = discovery.New(discovery.Config{
 		Router:     s.chanRouter,
 		Notifier:   s.cc.chainNotifier,
 		ChainHash:  *activeNetParams.GenesisHash,
 		Broadcast:  s.BroadcastMessage,
-		ChanSeries: &chanSeries{s.chanDB.ChannelGraph()},
+		ChanSeries: chanSeries,
 		SendToPeer: s.SendToPeer,
 		FindPeer: func(pub *btcec.PublicKey) (lnpeer.Peer, error) {
 			return s.FindPeer(pub)
@@ -1637,7 +1642,7 @@ func (s *server) establishPersistentConnections() error {
 	// TODO(roasbeef): instead iterate over link nodes and query graph for
 	// each of the nodes.
 	err = sourceNode.ForEachChannel(nil, func(
-		_ *bolt.Tx,
+		_ *bbolt.Tx,
 		_ *channeldb.ChannelEdgeInfo,
 		policy, _ *channeldb.ChannelEdgePolicy) error {
 
@@ -2821,8 +2826,10 @@ func (s *server) Peers() []*peer {
 // form "#RRGGBB", parses the hex color values, and returns a color.RGBA
 // struct of the same color.
 func parseHexColor(colorStr string) (color.RGBA, error) {
-	if len(colorStr) != 7 || colorStr[0] != '#' {
-		return color.RGBA{}, errors.New("Color must be in format #RRGGBB")
+	// Check if the hex color string is a valid color representation.
+	if !validColorRegexp.MatchString(colorStr) {
+		return color.RGBA{}, errors.New("Color must be specified " +
+			"using a hexadecimal value in the form #RRGGBB")
 	}
 
 	// Decode the hex color string to bytes.
@@ -2842,8 +2849,8 @@ func parseHexColor(colorStr string) (color.RGBA, error) {
 func computeNextBackoff(currBackoff time.Duration) time.Duration {
 	// Double the current backoff, truncating if it exceeds our maximum.
 	nextBackoff := 2 * currBackoff
-	if nextBackoff > maximumBackoff {
-		nextBackoff = maximumBackoff
+	if nextBackoff > cfg.MaxBackoff {
+		nextBackoff = cfg.MaxBackoff
 	}
 
 	// Using 1/10 of our duration as a margin, compute a random offset to

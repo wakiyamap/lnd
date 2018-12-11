@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -24,17 +26,21 @@ import (
 	"github.com/btcsuite/btcwallet/waddrmgr"
 	"github.com/coreos/bbolt"
 	"github.com/davecgh/go-spew/spew"
+	proxy "github.com/grpc-ecosystem/grpc-gateway/runtime"
 	"github.com/wakiyamap/lnd/build"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/htlcswitch"
+	"github.com/wakiyamap/lnd/lncfg"
 	"github.com/wakiyamap/lnd/lnrpc"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
+	"github.com/wakiyamap/lnd/macaroons"
 	"github.com/wakiyamap/lnd/routing"
 	"github.com/wakiyamap/lnd/signal"
 	"github.com/wakiyamap/lnd/zpay32"
 	"github.com/tv42/zbase32"
 	"golang.org/x/net/context"
+	"google.golang.org/grpc"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 )
 
@@ -122,6 +128,10 @@ var (
 		{
 			Entity: "invoices",
 			Action: "write",
+		},
+		{
+			Entity: "signer",
+			Action: "generate",
 		},
 	}
 
@@ -339,6 +349,31 @@ type rpcServer struct {
 
 	wg sync.WaitGroup
 
+	// subServers are a set of sub-RPC servers that use the same gRPC and
+	// listening sockets as the main RPC server, but which maintain their
+	// own independent service. This allows us to expose a set of
+	// micro-service like abstractions to the outside world for users to
+	// consume.
+	subServers []lnrpc.SubServer
+
+	// grpcServer is the main gRPC server that this RPC server, and all the
+	// sub-servers will use to register themselves and accept client
+	// requests from.
+	grpcServer *grpc.Server
+
+	// listenerCleanUp are a set of closures functions that will allow this
+	// main RPC server to clean up all the listening socket created for the
+	// server.
+	listenerCleanUp []func()
+
+	// restServerOpts are a set of gRPC dial options that the REST server
+	// proxy will use to connect to the main gRPC server.
+	restServerOpts []grpc.DialOption
+
+	// tlsCfg is the TLS config that allows the REST server proxy to
+	// connect to the main gRPC server to proxy all incoming requests.
+	tlsCfg *tls.Config
+
 	quit chan struct{}
 }
 
@@ -346,18 +381,178 @@ type rpcServer struct {
 // LightningServer gRPC service.
 var _ lnrpc.LightningServer = (*rpcServer)(nil)
 
-// newRPCServer creates and returns a new instance of the rpcServer.
-func newRPCServer(s *server) *rpcServer {
-	return &rpcServer{
-		server: s,
-		quit:   make(chan struct{}, 1),
+// newRPCServer creates and returns a new instance of the rpcServer. The
+// rpcServer will handle creating all listening sockets needed by it, and any
+// of the sub-servers that it maintains. The set of serverOpts should be the
+// base level options passed to the grPC server. This typically includes things
+// like requiring TLS, etc.
+func newRPCServer(s *server, macService *macaroons.Service,
+	subServerCgs *subRPCServerConfigs, serverOpts []grpc.ServerOption,
+	restServerOpts []grpc.DialOption,
+	tlsCfg *tls.Config) (*rpcServer, error) {
+
+	var (
+		subServers     []lnrpc.SubServer
+		subServerPerms []lnrpc.MacaroonPerms
+	)
+
+	// Before we create any of the sub-servers, we need to ensure that all
+	// the dependencies they need are properly populated within each sub
+	// server configuration struct.
+	err := subServerCgs.PopulateDependencies(
+		s.cc, networkDir, macService,
+	)
+	if err != nil {
+		return nil, err
 	}
+
+	// Now that the sub-servers have all their dependencies in place, we
+	// can create each sub-server!
+	registeredSubServers := lnrpc.RegisteredSubServers()
+	for _, subServer := range registeredSubServers {
+		subServerInstance, macPerms, err := subServer.New(subServerCgs)
+		if err != nil {
+			return nil, err
+		}
+
+		// We'll collect the sub-server, and also the set of
+		// permissions it needs for macaroons so we can apply the
+		// interceptors below.
+		subServers = append(subServers, subServerInstance)
+		subServerPerms = append(subServerPerms, macPerms)
+	}
+
+	// Next, we need to merge the set of sub server macaroon permissions
+	// with the main RPC server permissions so we can unite them under a
+	// single set of interceptors.
+	for _, subServerPerm := range subServerPerms {
+		for method, ops := range subServerPerm {
+			// For each new method:ops combo, we also ensure that
+			// non of the sub-servers try to override each other.
+			if _, ok := permissions[method]; ok {
+				return nil, fmt.Errorf("detected duplicate "+
+					"macaroon constraints for path: %v",
+					method)
+			}
+
+			permissions[method] = ops
+		}
+	}
+
+	// If macaroons aren't disabled (a non-nil service), then we'll set up
+	// our set of interceptors which will allow us handle the macaroon
+	// authentication in a single location .
+	if macService != nil {
+		unaryInterceptor := grpc.UnaryInterceptor(
+			macService.UnaryServerInterceptor(permissions),
+		)
+		streamInterceptor := grpc.StreamInterceptor(
+			macService.StreamServerInterceptor(permissions),
+		)
+
+		serverOpts = append(serverOpts,
+			unaryInterceptor, streamInterceptor,
+		)
+	}
+
+	// Finally, with all the pre-set up complete,  we can create the main
+	// gRPC server, and register the main lnrpc server along side.
+	grpcServer := grpc.NewServer(serverOpts...)
+	rootRPCServer := &rpcServer{
+		restServerOpts: restServerOpts,
+		subServers:     subServers,
+		tlsCfg:         tlsCfg,
+		grpcServer:     grpcServer,
+		server:         s,
+		quit:           make(chan struct{}, 1),
+	}
+	lnrpc.RegisterLightningServer(grpcServer, rootRPCServer)
+
+	// Now the main RPC server has been registered, we'll iterate through
+	// all the sub-RPC servers and register them to ensure that requests
+	// are properly routed towards them.
+	for _, subServer := range subServers {
+		err := subServer.RegisterWithRootServer(grpcServer)
+		if err != nil {
+			return nil, fmt.Errorf("unable to register "+
+				"sub-server %v with root: %v",
+				subServer.Name(), err)
+		}
+	}
+
+	return rootRPCServer, nil
 }
 
 // Start launches any helper goroutines required for the rpcServer to function.
 func (r *rpcServer) Start() error {
 	if atomic.AddInt32(&r.started, 1) != 1 {
 		return nil
+	}
+
+	// First, we'll start all the sub-servers to ensure that they're ready
+	// to take new requests in.
+	//
+	// TODO(roasbeef): some may require that the entire daemon be started
+	// at that point
+	for _, subServer := range r.subServers {
+		rpcsLog.Debugf("Starting sub RPC server: %v", subServer.Name())
+
+		if err := subServer.Start(); err != nil {
+			return err
+		}
+	}
+
+	// With all the sub-servers started, we'll spin up the listeners for
+	// the main RPC server itself.
+	for _, listener := range cfg.RPCListeners {
+		lis, err := lncfg.ListenOnAddress(listener)
+		if err != nil {
+			ltndLog.Errorf(
+				"RPC server unable to listen on %s", listener,
+			)
+			return err
+		}
+
+		r.listenerCleanUp = append(r.listenerCleanUp, func() {
+			lis.Close()
+		})
+
+		go func() {
+			rpcsLog.Infof("RPC server listening on %s", lis.Addr())
+			r.grpcServer.Serve(lis)
+		}()
+	}
+
+	// Finally, start the REST proxy for our gRPC server above.
+	//
+	// TODO(roasbeef): eventually also allow the sub-servers to themselves
+	// have a REST proxy.
+	mux := proxy.NewServeMux()
+	err := lnrpc.RegisterLightningHandlerFromEndpoint(
+		context.Background(), mux, cfg.RPCListeners[0].String(),
+		r.restServerOpts,
+	)
+	if err != nil {
+		return err
+	}
+	for _, restEndpoint := range cfg.RESTListeners {
+		lis, err := lncfg.TLSListenOnAddress(restEndpoint, r.tlsCfg)
+		if err != nil {
+			ltndLog.Errorf(
+				"gRPC proxy unable to listen on %s",
+				restEndpoint,
+			)
+			return err
+		}
+
+		r.listenerCleanUp = append(r.listenerCleanUp, func() {
+			lis.Close()
+		})
+
+		go func() {
+			rpcsLog.Infof("gRPC proxy started at %s", lis.Addr())
+			http.Serve(lis, mux)
+		}()
 	}
 
 	return nil
@@ -369,7 +564,29 @@ func (r *rpcServer) Stop() error {
 		return nil
 	}
 
+	rpcsLog.Infof("Stopping RPC Server")
+
 	close(r.quit)
+
+	// After we've signalled all of our active goroutines to exit, we'll
+	// then do the same to signal a graceful shutdown of all the sub
+	// servers.
+	for _, subServer := range r.subServers {
+		rpcsLog.Infof("Stopping %v Sub-RPC Server",
+			subServer.Name())
+
+		if err := subServer.Stop(); err != nil {
+			rpcsLog.Errorf("unable to stop sub-server %v: %v",
+				subServer.Name(), err)
+			continue
+		}
+	}
+
+	// Finally, we can clean up all the listening sockets to ensure that we
+	// give the file descriptors back to the OS.
+	for _, cleanUp := range r.listenerCleanUp {
+		cleanUp()
+	}
 
 	return nil
 }
@@ -408,7 +625,13 @@ func (r *rpcServer) sendCoinsOnChain(paymentMap map[string]int64,
 		return nil, err
 	}
 
-	return r.server.cc.wallet.SendOutputs(outputs, feeRate)
+	tx, err := r.server.cc.wallet.SendOutputs(outputs, feeRate)
+	if err != nil {
+		return nil, err
+	}
+
+	txHash := tx.TxHash()
+	return &txHash, err
 }
 
 // determineFeePerKw will determine the fee in sat/kw that should be paid given
@@ -1021,6 +1244,7 @@ func (r *rpcServer) OpenChannelSync(ctx context.Context,
 			FundingTxid: &lnrpc.ChannelPoint_FundingTxidBytes{
 				FundingTxidBytes: chanUpdate.Txid,
 			},
+			OutputIndex: chanUpdate.OutputIndex,
 		}, nil
 	case <-r.quit:
 		return nil, nil
@@ -1351,6 +1575,12 @@ func (r *rpcServer) GetInfo(ctx context.Context,
 		activeChannels += uint32(len(serverPeer.ChannelSnapshots()))
 	}
 
+	openChannels, err := r.server.chanDB.FetchAllOpenChannels()
+	if err != nil {
+		return nil, err
+	}
+	inactiveChannels := uint32(len(openChannels)) - activeChannels
+
 	pendingChannels, err := r.server.chanDB.FetchPendingChannels()
 	if err != nil {
 		return nil, fmt.Errorf("unable to get retrieve pending "+
@@ -1395,6 +1625,7 @@ func (r *rpcServer) GetInfo(ctx context.Context,
 		IdentityPubkey:      encodedIDPub,
 		NumPendingChannels:  nPendingChannels,
 		NumActiveChannels:   activeChannels,
+		NumInactiveChannels: inactiveChannels,
 		NumPeers:            uint32(len(serverPeers)),
 		BlockHeight:         uint32(bestHeight),
 		BlockHash:           bestHash.String(),
@@ -2411,6 +2642,7 @@ func (r *rpcServer) sendPayment(stream *paymentStream) error {
 				if err != nil {
 					if err := stream.send(&lnrpc.SendResponse{
 						PaymentError: err.Error(),
+						PaymentHash:  payIntent.rHash[:],
 					}); err != nil {
 						select {
 						case errChan <- err:
@@ -2469,6 +2701,7 @@ func (r *rpcServer) sendPayment(stream *paymentStream) error {
 				case resp.Err != nil:
 					err := stream.send(&lnrpc.SendResponse{
 						PaymentError: resp.Err.Error(),
+						PaymentHash:  payIntent.rHash[:],
 					})
 					if err != nil {
 						errChan <- err
@@ -2478,6 +2711,7 @@ func (r *rpcServer) sendPayment(stream *paymentStream) error {
 
 				marshalledRouted := r.marshallRoute(resp.Route)
 				err := stream.send(&lnrpc.SendResponse{
+					PaymentHash:     payIntent.rHash[:],
 					PaymentPreimage: resp.Preimage[:],
 					PaymentRoute:    marshalledRouted,
 				})
@@ -2562,10 +2796,12 @@ func (r *rpcServer) sendPaymentSync(ctx context.Context,
 	case resp.Err != nil:
 		return &lnrpc.SendResponse{
 			PaymentError: resp.Err.Error(),
+			PaymentHash:  payIntent.rHash[:],
 		}, nil
 	}
 
 	return &lnrpc.SendResponse{
+		PaymentHash:     payIntent.rHash[:],
 		PaymentPreimage: resp.Preimage[:],
 		PaymentRoute:    r.marshallRoute(resp.Route),
 	}, nil
@@ -3209,7 +3445,7 @@ func (r *rpcServer) DescribeGraph(ctx context.Context,
 	// First iterate through all the known nodes (connected or unconnected
 	// within the graph), collating their current state into the RPC
 	// response.
-	err := graph.ForEachNode(nil, func(_ *bolt.Tx, node *channeldb.LightningNode) error {
+	err := graph.ForEachNode(nil, func(_ *bbolt.Tx, node *channeldb.LightningNode) error {
 		nodeAddrs := make([]*lnrpc.NodeAddress, 0)
 		for _, addr := range node.Addresses {
 			nodeAddr := &lnrpc.NodeAddress{
@@ -3361,7 +3597,7 @@ func (r *rpcServer) GetNodeInfo(ctx context.Context,
 		numChannels   uint32
 		totalCapacity btcutil.Amount
 	)
-	if err := node.ForEachChannel(nil, func(_ *bolt.Tx, edge *channeldb.ChannelEdgeInfo,
+	if err := node.ForEachChannel(nil, func(_ *bbolt.Tx, edge *channeldb.ChannelEdgeInfo,
 		_, _ *channeldb.ChannelEdgePolicy) error {
 
 		numChannels++
@@ -3430,6 +3666,12 @@ func (r *rpcServer) QueryRoutes(ctx context.Context,
 
 	feeLimit := calculateFeeLimit(in.FeeLimit, amtMSat)
 
+	// numRoutes will default to 10 if not specified explicitly.
+	numRoutesIn := uint32(in.NumRoutes)
+	if numRoutesIn == 0 {
+		numRoutesIn = 10
+	}
+
 	// Query the channel router for a possible path to the destination that
 	// can carry `in.Amt` satoshis _including_ the total fee required on
 	// the route.
@@ -3439,11 +3681,11 @@ func (r *rpcServer) QueryRoutes(ctx context.Context,
 	)
 	if in.FinalCltvDelta == 0 {
 		routes, findErr = r.server.chanRouter.FindRoutes(
-			pubKey, amtMSat, feeLimit, uint32(in.NumRoutes),
+			pubKey, amtMSat, feeLimit, numRoutesIn,
 		)
 	} else {
 		routes, findErr = r.server.chanRouter.FindRoutes(
-			pubKey, amtMSat, feeLimit, uint32(in.NumRoutes),
+			pubKey, amtMSat, feeLimit, numRoutesIn,
 			uint16(in.FinalCltvDelta),
 		)
 	}
@@ -3454,9 +3696,9 @@ func (r *rpcServer) QueryRoutes(ctx context.Context,
 	// As the number of returned routes can be less than the number of
 	// requested routes, we'll clamp down the length of the response to the
 	// minimum of the two.
-	numRoutes := int32(len(routes))
-	if in.NumRoutes < numRoutes {
-		numRoutes = in.NumRoutes
+	numRoutes := uint32(len(routes))
+	if numRoutesIn < numRoutes {
+		numRoutes = numRoutesIn
 	}
 
 	// For each valid route, we'll convert the result into the format
@@ -3464,7 +3706,7 @@ func (r *rpcServer) QueryRoutes(ctx context.Context,
 	routeResp := &lnrpc.QueryRoutesResponse{
 		Routes: make([]*lnrpc.Route, 0, in.NumRoutes),
 	}
-	for i := int32(0); i < numRoutes; i++ {
+	for i := uint32(0); i < numRoutes; i++ {
 		routeResp.Routes = append(
 			routeResp.Routes, r.marshallRoute(routes[i]),
 		)
@@ -3509,6 +3751,8 @@ func (r *rpcServer) marshallRoute(route *routing.Route) *lnrpc.Route {
 			Fee:              int64(fee.ToSatoshis()),
 			FeeMsat:          int64(fee),
 			Expiry:           uint32(hop.OutgoingTimeLock),
+			PubKey: hex.EncodeToString(
+				hop.PubKeyBytes[:]),
 		}
 		incomingAmt = hop.AmtToForward
 	}
@@ -3516,52 +3760,108 @@ func (r *rpcServer) marshallRoute(route *routing.Route) *lnrpc.Route {
 	return resp
 }
 
+// unmarshallHopByChannelLookup unmarshalls an rpc hop for which the pub key is
+// not known. This function will query the channel graph with channel id to
+// retrieve both endpoints and determine the hop pubkey using the previous hop
+// pubkey. If the channel is unknown, an error is returned.
+func unmarshallHopByChannelLookup(graph *channeldb.ChannelGraph, hop *lnrpc.Hop,
+	prevPubKeyBytes [33]byte) (*routing.Hop, error) {
+
+	// Discard edge policies, because they may be nil.
+	edgeInfo, _, _, err := graph.FetchChannelEdgesByID(hop.ChanId)
+	if err != nil {
+		return nil, fmt.Errorf("unable to fetch channel edges by "+
+			"channel ID %d: %v", hop.ChanId, err)
+	}
+
+	var pubKeyBytes [33]byte
+	switch {
+	case prevPubKeyBytes == edgeInfo.NodeKey1Bytes:
+		pubKeyBytes = edgeInfo.NodeKey2Bytes
+	case prevPubKeyBytes == edgeInfo.NodeKey2Bytes:
+		pubKeyBytes = edgeInfo.NodeKey1Bytes
+	default:
+		return nil, fmt.Errorf("channel edge does not match expected node")
+	}
+
+	return &routing.Hop{
+		OutgoingTimeLock: hop.Expiry,
+		AmtToForward:     lnwire.MilliSatoshi(hop.AmtToForwardMsat),
+		PubKeyBytes:      pubKeyBytes,
+		ChannelID:        edgeInfo.ChannelID,
+	}, nil
+}
+
+// unmarshallKnownPubkeyHop unmarshalls an rpc hop that contains the hop pubkey.
+// The channel graph doesn't need to be queried because all information required
+// for sending the payment is present.
+func unmarshallKnownPubkeyHop(hop *lnrpc.Hop) (*routing.Hop, error) {
+	pubKey, err := hex.DecodeString(hop.PubKey)
+	if err != nil {
+		return nil, fmt.Errorf("cannot decode pubkey %s", hop.PubKey)
+	}
+
+	var pubKeyBytes [33]byte
+	copy(pubKeyBytes[:], pubKey)
+
+	return &routing.Hop{
+		OutgoingTimeLock: hop.Expiry,
+		AmtToForward:     lnwire.MilliSatoshi(hop.AmtToForwardMsat),
+		PubKeyBytes:      pubKeyBytes,
+		ChannelID:        hop.ChanId,
+	}, nil
+}
+
+// unmarshallHop unmarshalls an rpc hop that may or may not contain a node
+// pubkey.
+func unmarshallHop(graph *channeldb.ChannelGraph, hop *lnrpc.Hop,
+	prevNodePubKey [33]byte) (*routing.Hop, error) {
+
+	if hop.PubKey == "" {
+		// If no pub key is given of the hop, the local channel
+		// graph needs to be queried to complete the information
+		// necessary for routing.
+		return unmarshallHopByChannelLookup(graph, hop, prevNodePubKey)
+	}
+
+	return unmarshallKnownPubkeyHop(hop)
+}
+
+// unmarshallRoute unmarshalls an rpc route. For hops that don't specify a
+// pubkey, the channel graph is queried.
 func (r *rpcServer) unmarshallRoute(rpcroute *lnrpc.Route,
 	graph *channeldb.ChannelGraph) (*routing.Route, error) {
 
-	node, err := graph.SourceNode()
+	sourceNode, err := graph.SourceNode()
 	if err != nil {
 		return nil, fmt.Errorf("unable to fetch source node from graph "+
 			"while unmarshaling route. %v", err)
 	}
 
-	nodePubKeyBytes := node.PubKeyBytes[:]
+	prevNodePubKey := sourceNode.PubKeyBytes
 
 	hops := make([]*routing.Hop, len(rpcroute.Hops))
 	for i, hop := range rpcroute.Hops {
-		// Discard edge policies, because they may be nil.
-		edgeInfo, _, _, err := graph.FetchChannelEdgesByID(hop.ChanId)
+		routeHop, err := unmarshallHop(graph,
+			hop, prevNodePubKey)
 		if err != nil {
-			return nil, fmt.Errorf("unable to fetch channel edges by "+
-				"channel ID for hop (%d): %v", i, err)
+			return nil, err
 		}
 
-		var pubKeyBytes [33]byte
-		switch {
-		case bytes.Equal(nodePubKeyBytes[:], edgeInfo.NodeKey1Bytes[:]):
-			pubKeyBytes = edgeInfo.NodeKey2Bytes
-		case bytes.Equal(nodePubKeyBytes[:], edgeInfo.NodeKey2Bytes[:]):
-			pubKeyBytes = edgeInfo.NodeKey1Bytes
-		default:
-			return nil, fmt.Errorf("channel edge does not match expected node")
-		}
+		hops[i] = routeHop
 
-		hops[i] = &routing.Hop{
-			OutgoingTimeLock: hop.Expiry,
-			AmtToForward:     lnwire.MilliSatoshi(hop.AmtToForwardMsat),
-			PubKeyBytes:      pubKeyBytes,
-			ChannelID:        edgeInfo.ChannelID,
-		}
-
-		nodePubKeyBytes = pubKeyBytes[:]
+		prevNodePubKey = routeHop.PubKeyBytes
 	}
 
-	route := routing.NewRouteFromHops(
+	route, err := routing.NewRouteFromHops(
 		lnwire.MilliSatoshi(rpcroute.TotalAmtMsat),
 		rpcroute.TotalTimeLock,
-		node.PubKeyBytes,
+		sourceNode.PubKeyBytes,
 		hops,
 	)
+	if err != nil {
+		return nil, err
+	}
 
 	return route, nil
 }
@@ -3591,7 +3891,7 @@ func (r *rpcServer) GetNetworkInfo(ctx context.Context,
 	// network, tallying up the total number of nodes, and also gathering
 	// each node so we can measure the graph diameter and degree stats
 	// below.
-	if err := graph.ForEachNode(nil, func(tx *bolt.Tx, node *channeldb.LightningNode) error {
+	if err := graph.ForEachNode(nil, func(tx *bbolt.Tx, node *channeldb.LightningNode) error {
 		// Increment the total number of nodes with each iteration.
 		numNodes++
 
@@ -3601,7 +3901,7 @@ func (r *rpcServer) GetNetworkInfo(ctx context.Context,
 		// through the db transaction from the outer view so we can
 		// re-use it within this inner view.
 		var outDegree uint32
-		if err := node.ForEachChannel(tx, func(_ *bolt.Tx,
+		if err := node.ForEachChannel(tx, func(_ *bbolt.Tx,
 			edge *channeldb.ChannelEdgeInfo, _, _ *channeldb.ChannelEdgePolicy) error {
 
 			// Bump up the out degree for this node for each
@@ -3972,7 +4272,7 @@ func (r *rpcServer) FeeReport(ctx context.Context,
 	}
 
 	var feeReports []*lnrpc.ChannelFeeReport
-	err = selfNode.ForEachChannel(nil, func(_ *bolt.Tx, chanInfo *channeldb.ChannelEdgeInfo,
+	err = selfNode.ForEachChannel(nil, func(_ *bbolt.Tx, chanInfo *channeldb.ChannelEdgeInfo,
 		edgePolicy, _ *channeldb.ChannelEdgePolicy) error {
 
 		// Self node should always have policies for its channels.

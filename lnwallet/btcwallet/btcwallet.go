@@ -153,26 +153,13 @@ func (b *BtcWallet) InternalWallet() *base.Wallet {
 //
 // This is a part of the WalletController interface.
 func (b *BtcWallet) Start() error {
-	// Establish an RPC connection in addition to starting the goroutines
-	// in the underlying wallet.
-	if err := b.chain.Start(); err != nil {
-		return err
-	}
-
-	// Start the underlying btcwallet core.
-	b.wallet.Start()
-
-	// Pass the rpc client into the wallet so it can sync up to the
-	// current main chain.
-	b.wallet.SynchronizeRPC(b.chain)
-
+	// We'll start by unlocking the wallet and ensuring that the KeyScope:
+	// (1017, 1) exists within the internal waddrmgr. We'll need this in
+	// order to properly generate the keys required for signing various
+	// contracts.
 	if err := b.wallet.Unlock(b.cfg.PrivatePass, nil); err != nil {
 		return err
 	}
-
-	// We'll now ensure that the KeyScope: (1017, 1) exists within the
-	// internal waddrmgr. We'll need this in order to properly generate the
-	// keys required for signing various contracts.
 	_, err := b.wallet.Manager.FetchScopedKeyManager(b.chainKeyScope)
 	if err != nil {
 		// If the scope hasn't yet been created (it wouldn't been
@@ -190,6 +177,19 @@ func (b *BtcWallet) Start() error {
 			return err
 		}
 	}
+
+	// Establish an RPC connection in addition to starting the goroutines
+	// in the underlying wallet.
+	if err := b.chain.Start(); err != nil {
+		return err
+	}
+
+	// Start the underlying btcwallet core.
+	b.wallet.Start()
+
+	// Pass the rpc client into the wallet so it can sync up to the
+	// current main chain.
+	b.wallet.SynchronizeRPC(b.chain)
 
 	return nil
 }
@@ -268,7 +268,7 @@ func (b *BtcWallet) IsOurAddress(a btcutil.Address) bool {
 //
 // This is a part of the WalletController interface.
 func (b *BtcWallet) SendOutputs(outputs []*wire.TxOut,
-	feeRate lnwallet.SatPerKWeight) (*chainhash.Hash, error) {
+	feeRate lnwallet.SatPerKWeight) (*wire.MsgTx, error) {
 
 	// Convert our fee rate from sat/kw to sat/kb since it's required by
 	// SendOutputs.
@@ -730,7 +730,7 @@ func (b *BtcWallet) IsSynced() (bool, int64, error) {
 
 	// If the wallet hasn't yet fully synced to the node's best chain tip,
 	// then we're not yet fully synced.
-	if syncState.Height < bestHeight {
+	if syncState.Height < bestHeight || !b.wallet.ChainSynced() {
 		return false, bestTimestamp, nil
 	}
 

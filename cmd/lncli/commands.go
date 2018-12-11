@@ -1010,10 +1010,10 @@ var abandonChannelCommand = cli.Command{
 	Category: "Channels",
 	Usage:    "Abandons an existing channel.",
 	Description: `
-	Removes all channel state from the database except for a close 
+	Removes all channel state from the database except for a close
 	summary. This method can be used to get rid of permanently unusable
-	channels due to bugs fixed in newer versions of lnd. 
-	
+	channels due to bugs fixed in newer versions of lnd.
+
 	Only available when lnd is built in debug mode.
 
 	To view which funding_txids/output_indexes can be used for this command,
@@ -1585,7 +1585,39 @@ func getInfo(ctx *cli.Context) error {
 		return err
 	}
 
-	printRespJSON(resp)
+	// We print a struct that mimics the proto definition of GetInfoResponse
+	// but has a better ordering for the same list of fields.
+	printJSON(struct {
+		Version             string   `json:"version"`
+		IdentityPubkey      string   `json:"identity_pubkey"`
+		Alias               string   `json:"alias"`
+		NumPendingChannels  uint32   `json:"num_pending_channels"`
+		NumActiveChannels   uint32   `json:"num_active_channels"`
+		NumInactiveChannels uint32   `json:"num_inactive_channels"`
+		NumPeers            uint32   `json:"num_peers"`
+		BlockHeight         uint32   `json:"block_height"`
+		BlockHash           string   `json:"block_hash"`
+		BestHeaderTimestamp int64    `json:"best_header_timestamp"`
+		SyncedToChain       bool     `json:"synced_to_chain"`
+		Testnet             bool     `json:"testnet"`
+		Chains              []string `json:"chains"`
+		Uris                []string `json:"uris"`
+	}{
+		Version:             resp.Version,
+		IdentityPubkey:      resp.IdentityPubkey,
+		Alias:               resp.Alias,
+		NumPendingChannels:  resp.NumPendingChannels,
+		NumActiveChannels:   resp.NumActiveChannels,
+		NumInactiveChannels: resp.NumInactiveChannels,
+		NumPeers:            resp.NumPeers,
+		BlockHeight:         resp.BlockHeight,
+		BlockHash:           resp.BlockHash,
+		BestHeaderTimestamp: resp.BestHeaderTimestamp,
+		SyncedToChain:       resp.SyncedToChain,
+		Testnet:             resp.Testnet,
+		Chains:              resp.Chains,
+		Uris:                resp.Uris,
+	})
 	return nil
 }
 
@@ -2398,7 +2430,7 @@ var listInvoicesCommand = cli.Command{
 	Name:     "listinvoices",
 	Category: "Payments",
 	Usage: "List all invoices currently stored within the database. Any " +
-		"active debug invoices are ingnored.",
+		"active debug invoices are ignored.",
 	Description: `
 	This command enables the retrieval of all invoices currently stored
 	within the database. It has full support for paginationed responses,
@@ -2671,7 +2703,7 @@ var queryRoutesCommand = cli.Command{
 		},
 		cli.Int64Flag{
 			Name:  "num_max_routes",
-			Usage: "the max number of routes to be returned (default: 10)",
+			Usage: "the max number of routes to be returned",
 			Value: 10,
 		},
 		cli.Int64Flag{

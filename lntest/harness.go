@@ -22,6 +22,28 @@ import (
 	"github.com/wakiyamap/lnd/lnwire"
 )
 
+const (
+	// DefaultCSV is the CSV delay (remotedelay) we will start our test
+	// nodes with.
+	DefaultCSV = 4
+
+	// MinerMempoolTimeout is the max time we will wait for a transaction
+	// to propagate to the mining node's mempool.
+	MinerMempoolTimeout = time.Second * 30
+
+	// ChannelOpenTimeout is the max time we will wait before a channel to
+	// be considered opened.
+	ChannelOpenTimeout = time.Second * 30
+
+	// ChannelCloseTimeout is the max time we will wait before a channel is
+	// considered closed.
+	ChannelCloseTimeout = time.Second * 30
+
+	// DefaultTimeout is a timeout that will be used for various wait
+	// scenarios where no custom timeout value is defined.
+	DefaultTimeout = time.Second * 30
+)
+
 // NetworkHarness is an integration testing harness for the lightning network.
 // The harness by default is created with two active nodes on the network:
 // Alice and Bob.
@@ -374,6 +396,28 @@ func (n *NetworkHarness) RegisterNode(node *HarnessNode) {
 	n.mtx.Unlock()
 }
 
+func (n *NetworkHarness) connect(ctx context.Context,
+	req *lnrpc.ConnectPeerRequest, a *HarnessNode) error {
+
+	syncTimeout := time.After(15 * time.Second)
+tryconnect:
+	if _, err := a.ConnectPeer(ctx, req); err != nil {
+		// If the chain backend is still syncing, retry.
+		if strings.Contains(err.Error(), "still syncing") {
+			select {
+			case <-time.After(100 * time.Millisecond):
+				goto tryconnect
+			case <-syncTimeout:
+				return fmt.Errorf("chain backend did not " +
+					"finish syncing")
+			}
+		}
+		return err
+	}
+
+	return nil
+}
+
 // EnsureConnected will try to connect to two nodes, returning no error if they
 // are already connected. If the nodes were not connected previously, this will
 // behave the same as ConnectNodes. If a pending connection request has already
@@ -400,7 +444,7 @@ func (n *NetworkHarness) EnsureConnected(ctx context.Context, a, b *HarnessNode)
 		}
 
 		ctxt, _ = context.WithTimeout(ctx, 15*time.Second)
-		_, err = a.ConnectPeer(ctxt, req)
+		err = n.connect(ctxt, req, a)
 		switch {
 
 		// Request was successful, wait for both to display the
@@ -486,7 +530,8 @@ func (n *NetworkHarness) ConnectNodes(ctx context.Context, a, b *HarnessNode) er
 			Host:   b.cfg.P2PAddr(),
 		},
 	}
-	if _, err := a.ConnectPeer(ctx, req); err != nil {
+
+	if err := n.connect(ctx, req, a); err != nil {
 		return err
 	}
 

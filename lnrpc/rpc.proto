@@ -260,7 +260,12 @@ service Lightning {
     signature string is `zbase32` encoded and pubkey recoverable, meaning that
     only the message digest and signature are needed for verification.
     */
-    rpc SignMessage (SignMessageRequest) returns (SignMessageResponse);
+    rpc SignMessage (SignMessageRequest) returns (SignMessageResponse) {
+        option (google.api.http) = {
+            post: "/v1/signmessage"
+            body: "*"
+        };
+    }
 
     /** lncli: `verifymessage`
     VerifyMessage verifies a signature over a msg. The signature must be
@@ -268,7 +273,12 @@ service Lightning {
     channel database. In addition to returning the validity of the signature,
     VerifyMessage also returns the recovered pubkey from the signature.
     */
-    rpc VerifyMessage (VerifyMessageRequest) returns (VerifyMessageResponse);
+    rpc VerifyMessage (VerifyMessageRequest) returns (VerifyMessageResponse) {
+        option (google.api.http) = {
+            post: "/v1/verifymessage"
+            body: "*"
+        };
+    }
 
     /** lncli: `connect`
     ConnectPeer attempts to establish a connection to a remote peer. This is at
@@ -392,7 +402,7 @@ service Lightning {
     */
     rpc AbandonChannel (AbandonChannelRequest) returns (AbandonChannelResponse) {
         option (google.api.http) = {
-            delete: "/v1/channels/{channel_point.funding_txid_str}/{channel_point.output_index}"
+            delete: "/v1/channels/abandon/{channel_point.funding_txid_str}/{channel_point.output_index}"
         };
     }
 
@@ -730,6 +740,7 @@ message SendResponse {
     string payment_error = 1 [json_name = "payment_error"];
     bytes payment_preimage = 2 [json_name = "payment_preimage"];
     Route payment_route = 3 [json_name = "payment_route"];
+    bytes payment_hash = 4 [json_name = "payment_hash"];
 }
 
 message SendToRouteRequest {
@@ -1090,6 +1101,8 @@ message GetInfoResponse {
     /// The version of the LND software that the node is running.
     string version = 14 [ json_name = "version" ];
 
+    /// Number of inactive channels
+    uint32 num_inactive_channels = 15 [json_name = "num_inactive_channels"];
 }
 
 message ConfirmationUpdate {
@@ -1365,6 +1378,12 @@ message Hop {
     uint32 expiry = 5 [json_name = "expiry"];
     int64 amt_to_forward_msat = 6 [json_name = "amt_to_forward_msat"];
     int64 fee_msat = 7 [json_name = "fee_msat"];
+
+    /**
+    An optional public key of the hop. If the public key is given, the payment
+    can be executed without relying on a copy of the channel graph.
+    */
+    string pub_key = 8 [json_name = "pub_key"];
 }
 
 /**

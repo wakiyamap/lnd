@@ -421,8 +421,12 @@ func TestChannelUpdateValidation(t *testing.T) {
 		},
 	}
 
-	route := &Route{
-		Hops: hops,
+	route, err := NewRouteFromHops(
+		lnwire.MilliSatoshi(10000), 100,
+		NewVertex(ctx.aliases["a"]), hops,
+	)
+	if err != nil {
+		t.Fatalf("unable to create route: %v", err)
 	}
 
 	// Set up a channel update message with an invalid signature to be
@@ -1858,7 +1862,7 @@ func TestFindPathFeeWeighting(t *testing.T) {
 	}
 
 	ignoreVertex := make(map[Vertex]struct{})
-	ignoreEdge := make(map[uint64]struct{})
+	ignoreEdge := make(map[edgeLocator]struct{})
 
 	amt := lnwire.MilliSatoshi(100)
 
@@ -1871,8 +1875,15 @@ func TestFindPathFeeWeighting(t *testing.T) {
 	// the edge weighting, we should select the direct path over the 2 hop
 	// path even though the direct path has a higher potential time lock.
 	path, err := findPath(
-		nil, ctx.graph, nil, sourceNode, target, ignoreVertex,
-		ignoreEdge, amt, noFeeLimit, nil,
+		&graphParams{
+			graph: ctx.graph,
+		},
+		&restrictParams{
+			ignoredNodes: ignoreVertex,
+			ignoredEdges: ignoreEdge,
+			feeLimit:     noFeeLimit,
+		},
+		sourceNode, target, amt,
 	)
 	if err != nil {
 		t.Fatalf("unable to find path: %v", err)

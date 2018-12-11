@@ -19,6 +19,8 @@ import (
 	"github.com/wakiyamap/lnd/contractcourt"
 	"github.com/wakiyamap/lnd/discovery"
 	"github.com/wakiyamap/lnd/htlcswitch"
+	"github.com/wakiyamap/lnd/lnrpc/signrpc"
+	"github.com/wakiyamap/lnd/lnrpc/walletrpc"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/routing"
 	"github.com/wakiyamap/lnd/signal"
@@ -65,6 +67,8 @@ var (
 	cnctLog = build.NewSubLogger("CNCT", backendLog.Logger)
 	sphxLog = build.NewSubLogger("SPHX", backendLog.Logger)
 	swprLog = build.NewSubLogger("SWPR", backendLog.Logger)
+	sgnrLog = build.NewSubLogger("SGNR", backendLog.Logger)
+	wlktLog = build.NewSubLogger("WLKT", backendLog.Logger)
 )
 
 // Initialize package-global logger variables.
@@ -82,6 +86,8 @@ func init() {
 	sphinx.UseLogger(sphxLog)
 	signal.UseLogger(ltndLog)
 	sweep.UseLogger(swprLog)
+	signrpc.UseLogger(sgnrLog)
+	walletrpc.UseLogger(wlktLog)
 }
 
 // subsystemLoggers maps each subsystem identifier to its associated logger.
@@ -105,6 +111,8 @@ var subsystemLoggers = map[string]btclog.Logger{
 	"CNCT": cnctLog,
 	"SPHX": sphxLog,
 	"SWPR": swprLog,
+	"SGNR": sgnrLog,
+	"WLKT": wlktLog,
 }
 
 // initLogRotator initializes the logging rotator to write logs to logFile and

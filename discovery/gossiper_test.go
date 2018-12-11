@@ -196,6 +196,18 @@ func (r *mockGraphSource) GetChannelByID(chanID lnwire.ShortChannelID) (
 	return chanInfo, edges[0], edges[1], nil
 }
 
+func (r *mockGraphSource) FetchLightningNode(
+	nodePub routing.Vertex) (*channeldb.LightningNode, error) {
+
+	for _, node := range r.nodes {
+		if bytes.Equal(nodePub[:], node.PubKeyBytes[:]) {
+			return node, nil
+		}
+	}
+
+	return nil, channeldb.ErrGraphNodeNotFound
+}
+
 // IsStaleNode returns true if the graph source has a node announcement for the
 // target node with a more recent timestamp.
 func (r *mockGraphSource) IsStaleNode(nodePub routing.Vertex, timestamp time.Time) bool {
@@ -206,7 +218,18 @@ func (r *mockGraphSource) IsStaleNode(nodePub routing.Vertex, timestamp time.Tim
 		}
 	}
 
-	return false
+	// If we did not find the node among our existing graph nodes, we
+	// require the node to already have a channel in the graph to not be
+	// considered stale.
+	for _, info := range r.infos {
+		if info.NodeKey1Bytes == nodePub {
+			return false
+		}
+		if info.NodeKey2Bytes == nodePub {
+			return false
+		}
+	}
+	return true
 }
 
 // IsPublicNode determines whether the given vertex is seen as a public node in
@@ -806,7 +829,9 @@ func TestSignatureAnnouncementLocalFirst(t *testing.T) {
 	ctx.gossiper.cfg.FindPeer = func(target *btcec.PublicKey) (lnpeer.Peer, error) {
 		return &mockPeer{target, sentMsgs, ctx.gossiper.quit}, nil
 	}
-	ctx.gossiper.cfg.SendToPeer = func(target *btcec.PublicKey, msg ...lnwire.Message) error {
+	ctx.gossiper.cfg.SendToPeer = func(target *btcec.PublicKey,
+		msg ...lnwire.Message) error {
+
 		select {
 		case sentMsgs <- msg[0]:
 		case <-ctx.gossiper.quit:
@@ -833,13 +858,14 @@ func TestSignatureAnnouncementLocalFirst(t *testing.T) {
 	// Recreate lightning network topology. Initialize router with channel
 	// between two nodes.
 	select {
-	case err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localChanAnn,
-		localKey):
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.localChanAnn, localKey,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process local announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process channel ann: %v", err)
 	}
 	select {
 	case <-ctx.broadcastedMessage:
@@ -848,18 +874,34 @@ func TestSignatureAnnouncementLocalFirst(t *testing.T) {
 	}
 
 	select {
-	case err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.chanUpdAnn1,
-		localKey):
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.chanUpdAnn1, localKey,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process local announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process channel update: %v", err)
 	}
-
 	select {
 	case <-ctx.broadcastedMessage:
 		t.Fatal("channel update announcement was broadcast")
+	case <-time.After(2 * trickleDelay):
+	}
+
+	select {
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.nodeAnn1, localKey,
+	):
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not process local announcement")
+	}
+	if err != nil {
+		t.Fatalf("unable to process node ann: %v", err)
+	}
+	select {
+	case <-ctx.broadcastedMessage:
+		t.Fatal("node announcement was broadcast")
 	case <-time.After(2 * trickleDelay):
 	}
 
@@ -876,13 +918,14 @@ func TestSignatureAnnouncementLocalFirst(t *testing.T) {
 	}
 
 	select {
-	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.chanUpdAnn2,
-		remotePeer):
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.chanUpdAnn2, remotePeer,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process remote announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process channel update: %v", err)
 	}
 	select {
 	case <-ctx.broadcastedMessage:
@@ -890,16 +933,33 @@ func TestSignatureAnnouncementLocalFirst(t *testing.T) {
 	case <-time.After(2 * trickleDelay):
 	}
 
-	// Pretending that we receive local channel announcement from funding
-	// manager, thereby kick off the announcement exchange process.
 	select {
-	case err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localProofAnn,
-		localKey):
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.nodeAnn2, remotePeer,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process remote announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process node ann: %v", err)
+	}
+	select {
+	case <-ctx.broadcastedMessage:
+		t.Fatal("node announcement was broadcast")
+	case <-time.After(2 * trickleDelay):
+	}
+
+	// Pretending that we receive local channel announcement from funding
+	// manager, thereby kick off the announcement exchange process.
+	select {
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.localProofAnn, localKey,
+	):
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not process remote announcement")
+	}
+	if err != nil {
+		t.Fatalf("unable to process local proof: %v", err)
 	}
 
 	select {
@@ -923,16 +983,17 @@ func TestSignatureAnnouncementLocalFirst(t *testing.T) {
 	}
 
 	select {
-	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.remoteProofAnn,
-		remotePeer):
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.remoteProofAnn, remotePeer,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process remote announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process remote proof: %v", err)
 	}
 
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 5; i++ {
 		select {
 		case <-ctx.broadcastedMessage:
 		case <-time.After(time.Second):
@@ -1059,6 +1120,22 @@ func TestOrphanSignatureAnnouncement(t *testing.T) {
 	case <-time.After(2 * trickleDelay):
 	}
 
+	select {
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.nodeAnn1, localKey,
+	):
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not process local announcement")
+	}
+	if err != nil {
+		t.Fatalf("unable to process node ann: %v", err)
+	}
+	select {
+	case <-ctx.broadcastedMessage:
+		t.Fatal("node announcement was broadcast")
+	case <-time.After(2 * trickleDelay):
+	}
+
 	// The local ChannelUpdate should now be sent directly to the remote peer,
 	// such that the edge can be used for routing, regardless if this channel
 	// is announced or not (private channel).
@@ -1078,11 +1155,27 @@ func TestOrphanSignatureAnnouncement(t *testing.T) {
 		t.Fatal("did not process remote announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process: %v", err)
+		t.Fatalf("unable to process node ann: %v", err)
 	}
 	select {
 	case <-ctx.broadcastedMessage:
 		t.Fatal("channel update announcement was broadcast")
+	case <-time.After(2 * trickleDelay):
+	}
+
+	select {
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.nodeAnn2, remotePeer,
+	):
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not process remote announcement")
+	}
+	if err != nil {
+		t.Fatalf("unable to process: %v", err)
+	}
+	select {
+	case <-ctx.broadcastedMessage:
+		t.Fatal("node announcement announcement was broadcast")
 	case <-time.After(2 * trickleDelay):
 	}
 
@@ -1110,7 +1203,7 @@ func TestOrphanSignatureAnnouncement(t *testing.T) {
 
 	// And since both remote and local announcements are processed, we
 	// should be broadcasting the final channel announcements.
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 5; i++ {
 		select {
 		case <-ctx.broadcastedMessage:
 		case <-time.After(time.Second):
@@ -1162,13 +1255,14 @@ func TestSignatureAnnouncementRetry(t *testing.T) {
 	// Recreate lightning network topology. Initialize router with channel
 	// between two nodes.
 	select {
-	case err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localChanAnn,
-		localKey):
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.localChanAnn, localKey,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process local announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process channel ann: %v", err)
 	}
 	select {
 	case <-ctx.broadcastedMessage:
@@ -1177,13 +1271,14 @@ func TestSignatureAnnouncementRetry(t *testing.T) {
 	}
 
 	select {
-	case err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.chanUpdAnn1,
-		localKey):
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.chanUpdAnn1, localKey,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process local announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process channel update: %v", err)
 	}
 	select {
 	case <-ctx.broadcastedMessage:
@@ -1192,17 +1287,50 @@ func TestSignatureAnnouncementRetry(t *testing.T) {
 	}
 
 	select {
-	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.chanUpdAnn2,
-		remotePeer):
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.nodeAnn1, localKey,
+	):
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not process local announcement")
+	}
+	if err != nil {
+		t.Fatalf("unable to process node ann: %v", err)
+	}
+	select {
+	case <-ctx.broadcastedMessage:
+		t.Fatal("node announcement was broadcast")
+	case <-time.After(2 * trickleDelay):
+	}
+
+	select {
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.chanUpdAnn2, remotePeer,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process remote announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process channel update: %v", err)
 	}
 	select {
 	case <-ctx.broadcastedMessage:
 		t.Fatal("channel update announcement was broadcast")
+	case <-time.After(2 * trickleDelay):
+	}
+
+	select {
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.nodeAnn2, remotePeer,
+	):
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not process remote announcement")
+	}
+	if err != nil {
+		t.Fatalf("unable to process node ann: %v", err)
+	}
+	select {
+	case <-ctx.broadcastedMessage:
+		t.Fatal("node announcement was broadcast")
 	case <-time.After(2 * trickleDelay):
 	}
 
@@ -1224,13 +1352,14 @@ func TestSignatureAnnouncementRetry(t *testing.T) {
 	// Pretending that we receive local channel announcement from funding
 	// manager, thereby kick off the announcement exchange process.
 	select {
-	case err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localProofAnn,
-		localKey):
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.localProofAnn, localKey,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process local announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process local proof: %v", err)
 	}
 
 	// Since sending this local announcement proof to the remote will fail,
@@ -1289,16 +1418,17 @@ func TestSignatureAnnouncementRetry(t *testing.T) {
 	// Now give the gossiper the remote proof. This should trigger a
 	// broadcast of 3 messages (ChannelAnnouncement + 2 ChannelUpdate).
 	select {
-	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.remoteProofAnn,
-		remotePeer):
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.remoteProofAnn, remotePeer,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process local announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process remote proof: %v", err)
 	}
 
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 5; i++ {
 		select {
 		case <-ctx.broadcastedMessage:
 		case <-time.After(time.Second):
@@ -1351,13 +1481,14 @@ func TestSignatureAnnouncementRetryAtStartup(t *testing.T) {
 	// Recreate lightning network topology. Initialize router with channel
 	// between two nodes.
 	select {
-	case err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localChanAnn,
-		localKey):
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.localChanAnn, localKey,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process local announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process channel ann: %v", err)
 	}
 	select {
 	case <-ctx.broadcastedMessage:
@@ -1366,13 +1497,14 @@ func TestSignatureAnnouncementRetryAtStartup(t *testing.T) {
 	}
 
 	select {
-	case err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.chanUpdAnn1,
-		localKey):
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.chanUpdAnn1, localKey,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process local announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process channel update: %v", err)
 	}
 	select {
 	case <-ctx.broadcastedMessage:
@@ -1381,17 +1513,50 @@ func TestSignatureAnnouncementRetryAtStartup(t *testing.T) {
 	}
 
 	select {
-	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.chanUpdAnn2,
-		remotePeer):
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.nodeAnn1, localKey,
+	):
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not process local announcement")
+	}
+	if err != nil {
+		t.Fatalf("unable to process node ann: %v", err)
+	}
+	select {
+	case <-ctx.broadcastedMessage:
+		t.Fatal("node announcement was broadcast")
+	case <-time.After(2 * trickleDelay):
+	}
+
+	select {
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.chanUpdAnn2, remotePeer,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process remote announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process channel update: %v", err)
 	}
 	select {
 	case <-ctx.broadcastedMessage:
 		t.Fatal("channel update announcement was broadcast")
+	case <-time.After(2 * trickleDelay):
+	}
+
+	select {
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.nodeAnn2, remotePeer,
+	):
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not process local announcement")
+	}
+	if err != nil {
+		t.Fatalf("unable to process node ann: %v", err)
+	}
+	select {
+	case <-ctx.broadcastedMessage:
+		t.Fatal("node announcement was broadcast")
 	case <-time.After(2 * trickleDelay):
 	}
 
@@ -1514,8 +1679,9 @@ func TestSignatureAnnouncementRetryAtStartup(t *testing.T) {
 	// Now exchanging the remote channel proof, the channel announcement
 	// broadcast should continue as normal.
 	select {
-	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.remoteProofAnn,
-		remotePeer):
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.remoteProofAnn, remotePeer,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process remote announcement")
 	}
@@ -1523,7 +1689,7 @@ func TestSignatureAnnouncementRetryAtStartup(t *testing.T) {
 		t.Fatalf("unable to process :%v", err)
 	}
 
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 5; i++ {
 		select {
 		case <-ctx.broadcastedMessage:
 		case <-time.After(time.Second):
@@ -1577,13 +1743,14 @@ func TestSignatureAnnouncementFullProofWhenRemoteProof(t *testing.T) {
 	// Recreate lightning network topology. Initialize router with channel
 	// between two nodes.
 	select {
-	case err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localChanAnn,
-		localKey):
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.localChanAnn, localKey,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process local announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process channel ann: %v", err)
 	}
 	select {
 	case <-ctx.broadcastedMessage:
@@ -1592,13 +1759,14 @@ func TestSignatureAnnouncementFullProofWhenRemoteProof(t *testing.T) {
 	}
 
 	select {
-	case err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.chanUpdAnn1,
-		localKey):
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.chanUpdAnn1, localKey,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process local announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process channel update: %v", err)
 	}
 	select {
 	case <-ctx.broadcastedMessage:
@@ -1607,19 +1775,53 @@ func TestSignatureAnnouncementFullProofWhenRemoteProof(t *testing.T) {
 	}
 
 	select {
-	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.chanUpdAnn2,
-		remotePeer):
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.nodeAnn1, localKey,
+	):
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not process local announcement")
+	}
+	if err != nil {
+		t.Fatalf("unable to process node ann:%v", err)
+	}
+	select {
+	case <-ctx.broadcastedMessage:
+		t.Fatal("node announcement was broadcast")
+	case <-time.After(2 * trickleDelay):
+	}
+
+	select {
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.chanUpdAnn2, remotePeer,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process remote announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process channel update: %v", err)
 	}
 	select {
 	case <-ctx.broadcastedMessage:
 		t.Fatal("channel update announcement was broadcast")
 	case <-time.After(2 * trickleDelay):
 	}
+
+	select {
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.nodeAnn2, remotePeer,
+	):
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not process remote announcement")
+	}
+	if err != nil {
+		t.Fatalf("unable to process node ann: %v", err)
+	}
+	select {
+	case <-ctx.broadcastedMessage:
+		t.Fatal("node announcement was broadcast")
+	case <-time.After(2 * trickleDelay):
+	}
+
 	// Set up a channel we can use to inspect messages sent by the
 	// gossiper to the remote peer.
 	sentToPeer := make(chan lnwire.Message, 1)
@@ -1644,23 +1846,25 @@ func TestSignatureAnnouncementFullProofWhenRemoteProof(t *testing.T) {
 	// Pretending that we receive local channel announcement from funding
 	// manager, thereby kick off the announcement exchange process.
 	select {
-	case err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localProofAnn,
-		localKey):
+	case err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.localProofAnn, localKey,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process local announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process local proof: %v", err)
 	}
 
 	select {
-	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.remoteProofAnn,
-		remotePeer):
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.remoteProofAnn, remotePeer,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process local announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process remote proof: %v", err)
 	}
 
 	// We expect the gossiper to send this message to the remote peer.
@@ -1673,8 +1877,8 @@ func TestSignatureAnnouncementFullProofWhenRemoteProof(t *testing.T) {
 		t.Fatal("did not send local proof to peer")
 	}
 
-	// And all channel announcements should be broadcast.
-	for i := 0; i < 3; i++ {
+	// All channel and node announcements should be broadcast.
+	for i := 0; i < 5; i++ {
 		select {
 		case <-ctx.broadcastedMessage:
 		case <-time.After(time.Second):
@@ -1699,13 +1903,14 @@ func TestSignatureAnnouncementFullProofWhenRemoteProof(t *testing.T) {
 	// Now give the gossiper the remote proof yet again. This should
 	// trigger a send of the full ChannelAnnouncement.
 	select {
-	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.remoteProofAnn,
-		remotePeer):
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.remoteProofAnn, remotePeer,
+	):
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not process local announcement")
 	}
 	if err != nil {
-		t.Fatalf("unable to process :%v", err)
+		t.Fatalf("unable to process remote proof: %v", err)
 	}
 
 	// We expect the gossiper to send this message to the remote peer.
@@ -1718,7 +1923,6 @@ func TestSignatureAnnouncementFullProofWhenRemoteProof(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not send local proof to peer")
 	}
-
 }
 
 // TestDeDuplicatedAnnouncements ensures that the deDupedAnnouncements struct
@@ -2140,11 +2344,22 @@ func TestReceiveRemoteChannelUpdateFirst(t *testing.T) {
 	// Recreate the case where the remote node is sending us its ChannelUpdate
 	// before we have been able to process our own ChannelAnnouncement and
 	// ChannelUpdate.
-	errRemoteAnn := ctx.gossiper.ProcessRemoteAnnouncement(batch.chanUpdAnn2, remotePeer)
-
+	errRemoteAnn := ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.chanUpdAnn2, remotePeer,
+	)
 	select {
 	case <-ctx.broadcastedMessage:
 		t.Fatal("channel update announcement was broadcast")
+	case <-time.After(2 * trickleDelay):
+	}
+
+	err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.nodeAnn2, remotePeer)
+	if err != nil {
+		t.Fatalf("unable to process node ann: %v", err)
+	}
+	select {
+	case <-ctx.broadcastedMessage:
+		t.Fatal("node announcement was broadcast")
 	case <-time.After(2 * trickleDelay):
 	}
 
@@ -2188,6 +2403,16 @@ func TestReceiveRemoteChannelUpdateFirst(t *testing.T) {
 	case <-time.After(2 * trickleDelay):
 	}
 
+	err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.nodeAnn1, localKey)
+	if err != nil {
+		t.Fatalf("unable to process :%v", err)
+	}
+	select {
+	case <-ctx.broadcastedMessage:
+		t.Fatal("node announcement was broadcast")
+	case <-time.After(2 * trickleDelay):
+	}
+
 	// The local ChannelUpdate should now be sent directly to the remote peer,
 	// such that the edge can be used for routing, regardless if this channel
 	// is announced or not (private channel).
@@ -2212,7 +2437,9 @@ func TestReceiveRemoteChannelUpdateFirst(t *testing.T) {
 	}
 
 	// Check that the ChannelEdgePolicy was added to the graph.
-	chanInfo, e1, e2, err = ctx.router.GetChannelByID(batch.chanUpdAnn1.ShortChannelID)
+	chanInfo, e1, e2, err = ctx.router.GetChannelByID(
+		batch.chanUpdAnn1.ShortChannelID,
+	)
 	if err != nil {
 		t.Fatalf("unable to get channel from router: %v", err)
 	}
@@ -2228,7 +2455,9 @@ func TestReceiveRemoteChannelUpdateFirst(t *testing.T) {
 
 	// Pretending that we receive local channel announcement from funding
 	// manager, thereby kick off the announcement exchange process.
-	err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localProofAnn, localKey)
+	err = <-ctx.gossiper.ProcessLocalAnnouncement(
+		batch.localProofAnn, localKey,
+	)
 	if err != nil {
 		t.Fatalf("unable to process :%v", err)
 	}
@@ -2253,12 +2482,14 @@ func TestReceiveRemoteChannelUpdateFirst(t *testing.T) {
 		t.Fatal("wrong number of objects in storage")
 	}
 
-	err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.remoteProofAnn, remotePeer)
+	err = <-ctx.gossiper.ProcessRemoteAnnouncement(
+		batch.remoteProofAnn, remotePeer,
+	)
 	if err != nil {
 		t.Fatalf("unable to process :%v", err)
 	}
 
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		select {
 		case <-ctx.broadcastedMessage:
 		case <-time.After(time.Second):
@@ -2415,6 +2646,109 @@ func TestExtraDataNodeAnnouncementValidation(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatalf("unable to process announcement: %v", err)
+	}
+}
+
+// TestNodeAnnouncementNoChannels tests that NodeAnnouncements for nodes with
+// no existing channels in the graph do not get forwarded.
+func TestNodeAnnouncementNoChannels(t *testing.T) {
+	t.Parallel()
+
+	ctx, cleanup, err := createTestCtx(0)
+	if err != nil {
+		t.Fatalf("can't create context: %v", err)
+	}
+	defer cleanup()
+
+	batch, err := createAnnouncements(0)
+	if err != nil {
+		t.Fatalf("can't generate announcements: %v", err)
+	}
+
+	remoteKey, err := btcec.ParsePubKey(batch.nodeAnn2.NodeID[:],
+		btcec.S256())
+	if err != nil {
+		t.Fatalf("unable to parse pubkey: %v", err)
+	}
+	remotePeer := &mockPeer{remoteKey, nil, nil}
+
+	// Process the remote node announcement.
+	select {
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.nodeAnn2,
+		remotePeer):
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not process remote announcement")
+	}
+	if err != nil {
+		t.Fatalf("unable to process announcement: %v", err)
+	}
+
+	// Since no channels or node announcements were already in the graph,
+	// the node announcement should be ignored, and not forwarded.
+	select {
+	case <-ctx.broadcastedMessage:
+		t.Fatal("node announcement was broadcast")
+	case <-time.After(2 * trickleDelay):
+	}
+
+	// Now add the node's channel to the graph by processing the channel
+	// announement and channel update.
+	select {
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.remoteChanAnn,
+		remotePeer):
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not process remote announcement")
+	}
+	if err != nil {
+		t.Fatalf("unable to process announcement: %v", err)
+	}
+
+	select {
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.chanUpdAnn2,
+		remotePeer):
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not process remote announcement")
+	}
+	if err != nil {
+		t.Fatalf("unable to process announcement: %v", err)
+	}
+
+	// Now process the node announcement again.
+	select {
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.nodeAnn2, remotePeer):
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not process remote announcement")
+	}
+	if err != nil {
+		t.Fatalf("unable to process announcement: %v", err)
+	}
+
+	// This time the node announcement should be forwarded. The same should
+	// the channel announcement and update be.
+	for i := 0; i < 3; i++ {
+		select {
+		case <-ctx.broadcastedMessage:
+		case <-time.After(time.Second):
+			t.Fatal("announcement wasn't broadcast")
+		}
+	}
+
+	// Processing the same node announement again should be ignored, as it
+	// is stale.
+	select {
+	case err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.nodeAnn2,
+		remotePeer):
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not process remote announcement")
+	}
+	if err != nil {
+		t.Fatalf("unable to process announcement: %v", err)
+	}
+
+	select {
+	case <-ctx.broadcastedMessage:
+		t.Fatal("node announcement was broadcast")
+	case <-time.After(2 * trickleDelay):
 	}
 }
 

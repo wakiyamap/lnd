@@ -456,12 +456,67 @@ func (d *AuthenticatedGossiper) Stop() {
 func (d *AuthenticatedGossiper) ProcessRemoteAnnouncement(msg lnwire.Message,
 	peer lnpeer.Peer) chan error {
 
+	errChan := make(chan error, 1)
+
+	// For messages in the known set of channel series queries, we'll
+	// dispatch the message directly to the gossipSyncer, and skip the main
+	// processing loop.
+	switch m := msg.(type) {
+	case *lnwire.QueryShortChanIDs,
+		*lnwire.QueryChannelRange,
+		*lnwire.ReplyChannelRange,
+		*lnwire.ReplyShortChanIDsEnd:
+
+		syncer, err := d.findGossipSyncer(peer.IdentityKey())
+		if err != nil {
+			log.Warnf("Unable to find gossip syncer for "+
+				"peer=%x: %v", peer.PubKey(), err)
+
+			errChan <- err
+			return errChan
+		}
+
+		// If we've found the message target, then we'll dispatch the
+		// message directly to it.
+		syncer.ProcessQueryMsg(m, peer.QuitSignal())
+
+		errChan <- nil
+		return errChan
+
+	// If a peer is updating its current update horizon, then we'll dispatch
+	// that directly to the proper gossipSyncer.
+	case *lnwire.GossipTimestampRange:
+		syncer, err := d.findGossipSyncer(peer.IdentityKey())
+		if err != nil {
+			log.Warnf("Unable to find gossip syncer for "+
+				"peer=%x: %v", peer.PubKey(), err)
+
+			errChan <- err
+			return errChan
+		}
+
+		// If we've found the message target, then we'll dispatch the
+		// message directly to it.
+		err = syncer.ApplyGossipFilter(m)
+		if err != nil {
+			log.Warnf("unable to apply gossip "+
+				"filter for peer=%x: %v",
+				peer.PubKey(), err)
+
+			errChan <- err
+			return errChan
+		}
+
+		errChan <- nil
+		return errChan
+	}
+
 	nMsg := &networkMsg{
 		msg:      msg,
 		isRemote: true,
 		peer:     peer,
 		source:   peer.IdentityKey(),
-		err:      make(chan error, 1),
+		err:      errChan,
 	}
 
 	select {
@@ -771,7 +826,7 @@ func (d *AuthenticatedGossiper) resendAnnounceSignatures() error {
 	// TODO(halseth): database access should be abstracted
 	// behind interface.
 	var msgsResend []msgTuple
-	if err := d.cfg.DB.View(func(tx *bolt.Tx) error {
+	if err := d.cfg.DB.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(messageStoreKey)
 		if bucket == nil {
 			return nil
@@ -817,7 +872,7 @@ func (d *AuthenticatedGossiper) resendAnnounceSignatures() error {
 	deleteMsg := func(t msgTuple) error {
 		log.Debugf("Deleting message for chanID=%v from "+
 			"messageStore", t.msg.ChannelID)
-		if err := d.cfg.DB.Update(func(tx *bolt.Tx) error {
+		if err := d.cfg.DB.Update(func(tx *bbolt.Tx) error {
 			bucket := tx.Bucket(messageStoreKey)
 			if bucket == nil {
 				return fmt.Errorf("bucket " +
@@ -965,7 +1020,7 @@ func (d *AuthenticatedGossiper) networkHandler() {
 			policyUpdate.errResp <- nil
 
 		case announcement := <-d.networkMsgs:
-			switch msg := announcement.msg.(type) {
+			switch announcement.msg.(type) {
 			// Channel announcement signatures are amongst the only
 			// messages that we'll process serially.
 			case *lnwire.AnnounceSignatures:
@@ -977,51 +1032,6 @@ func (d *AuthenticatedGossiper) networkHandler() {
 						emittedAnnouncements...,
 					)
 				}
-				continue
-
-			// If a peer is updating its current update horizon,
-			// then we'll dispatch that directly to the proper
-			// gossipSyncer.
-			case *lnwire.GossipTimestampRange:
-				syncer, err := d.findGossipSyncer(
-					announcement.source,
-				)
-				if err != nil {
-					log.Warnf("Unable to find gossip "+
-						"syncer for peer=%x: %v",
-						announcement.peer.PubKey(), err)
-					continue
-				}
-
-				// If we've found the message target, then
-				// we'll dispatch the message directly to it.
-				err = syncer.ApplyGossipFilter(msg)
-				if err != nil {
-					log.Warnf("unable to apply gossip "+
-						"filter for peer=%x: %v",
-						announcement.peer.PubKey(), err)
-				}
-				continue
-
-			// For messages in the known set of channel series
-			// queries, we'll dispatch the message directly to the
-			// peer, and skip the main processing loop.
-			case *lnwire.QueryShortChanIDs,
-				*lnwire.QueryChannelRange,
-				*lnwire.ReplyChannelRange,
-				*lnwire.ReplyShortChanIDsEnd:
-
-				syncer, err := d.findGossipSyncer(
-					announcement.source,
-				)
-				if err != nil {
-					log.Warnf("Unable to find gossip "+
-						"syncer for peer=%x: %v",
-						announcement.source, err)
-					continue
-				}
-
-				syncer.ProcessQueryMsg(announcement.msg)
 				continue
 			}
 
@@ -1567,22 +1577,20 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(
 	case *lnwire.NodeAnnouncement:
 		timestamp := time.Unix(int64(msg.Timestamp), 0)
 
-		if nMsg.isRemote {
-			// We'll quickly ask the router if it already has a
-			// newer update for this node so we can skip validating
-			// signatures if not required.
-			if d.cfg.Router.IsStaleNode(msg.NodeID, timestamp) {
-				nMsg.err <- nil
-				return nil
-			}
+		// We'll quickly ask the router if it already has a
+		// newer update for this node so we can skip validating
+		// signatures if not required.
+		if d.cfg.Router.IsStaleNode(msg.NodeID, timestamp) {
+			nMsg.err <- nil
+			return nil
+		}
 
-			if err := routing.ValidateNodeAnn(msg); err != nil {
-				err := fmt.Errorf("unable to validate "+
-					"node announcement: %v", err)
-				log.Error(err)
-				nMsg.err <- err
-				return nil
-			}
+		if err := routing.ValidateNodeAnn(msg); err != nil {
+			err := fmt.Errorf("unable to validate "+
+				"node announcement: %v", err)
+			log.Error(err)
+			nMsg.err <- err
+			return nil
 		}
 
 		features := lnwire.NewFeatureVector(
@@ -1632,6 +1640,9 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(
 				source: nMsg.source,
 				msg:    msg,
 			})
+		} else {
+			log.Tracef("Skipping broadcasting node announcement "+
+				"for %x due to being unadvertised", msg.NodeID)
 		}
 
 		nMsg.err <- nil
@@ -2353,6 +2364,31 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(
 			})
 		}
 
+		// We'll also send along the node announcements for each channel
+		// participant if we know of them.
+		node1Ann, err := d.fetchNodeAnn(chanInfo.NodeKey1Bytes)
+		if err != nil {
+			log.Debugf("Unable to fetch node announcement for "+
+				"%x: %v", chanInfo.NodeKey1Bytes, err)
+		} else {
+			announcements = append(announcements, networkMsg{
+				peer:   nMsg.peer,
+				source: nMsg.source,
+				msg:    node1Ann,
+			})
+		}
+		node2Ann, err := d.fetchNodeAnn(chanInfo.NodeKey2Bytes)
+		if err != nil {
+			log.Debugf("Unable to fetch node announcement for "+
+				"%x: %v", chanInfo.NodeKey2Bytes, err)
+		} else {
+			announcements = append(announcements, networkMsg{
+				peer:   nMsg.peer,
+				source: nMsg.source,
+				msg:    node2Ann,
+			})
+		}
+
 		nMsg.err <- nil
 		return announcements
 
@@ -2360,6 +2396,19 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(
 		nMsg.err <- errors.New("wrong type of the announcement")
 		return nil
 	}
+}
+
+// fetchNodeAnn fetches the latest signed node announcement from our point of
+// view for the node with the given public key.
+func (d *AuthenticatedGossiper) fetchNodeAnn(
+	pubKey [33]byte) (*lnwire.NodeAnnouncement, error) {
+
+	node, err := d.cfg.Router.FetchLightningNode(pubKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return node.NodeAnnouncement(true)
 }
 
 // sendAnnSigReliably will try to send the provided local AnnounceSignatures
@@ -2378,7 +2427,7 @@ func (d *AuthenticatedGossiper) sendAnnSigReliably(
 	copy(key[:33], remotePeer.SerializeCompressed())
 	binary.BigEndian.PutUint64(key[33:], msg.ShortChannelID.ToUint64())
 
-	err := d.cfg.DB.Update(func(tx *bolt.Tx) error {
+	err := d.cfg.DB.Update(func(tx *bbolt.Tx) error {
 		bucket, err := tx.CreateBucketIfNotExists(messageStoreKey)
 		if err != nil {
 			return err
