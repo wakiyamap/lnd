@@ -229,7 +229,7 @@ func CreateTestChannels() (*LightningChannel, *LightningChannel, func(), error) 
 		return nil, nil, nil, err
 	}
 
-	estimator := &StaticFeeEstimator{FeePerKW: 6000}
+	estimator := NewStaticFeeEstimator(6000, 0)
 	feePerKw, err := estimator.EstimateFeePerKW(1)
 	if err != nil {
 		return nil, nil, nil, err
@@ -309,18 +309,24 @@ func CreateTestChannels() (*LightningChannel, *LightningChannel, func(), error) 
 	}
 
 	// TODO(roasbeef): make mock version of pre-image store
+
+	alicePool := NewSigPool(1, aliceSigner)
 	channelAlice, err := NewLightningChannel(
-		aliceSigner, pCache, aliceChannelState,
+		aliceSigner, pCache, aliceChannelState, alicePool,
 	)
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	alicePool.Start()
+
+	bobPool := NewSigPool(1, bobSigner)
 	channelBob, err := NewLightningChannel(
-		bobSigner, pCache, bobChannelState,
+		bobSigner, pCache, bobChannelState, bobPool,
 	)
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	bobPool.Start()
 
 	err = SetStateNumHint(
 		aliceCommitTx, 0, channelAlice.stateHintObfuscator,
@@ -346,8 +352,8 @@ func CreateTestChannels() (*LightningChannel, *LightningChannel, func(), error) 
 		os.RemoveAll(bobPath)
 		os.RemoveAll(alicePath)
 
-		channelAlice.Stop()
-		channelBob.Stop()
+		alicePool.Stop()
+		bobPool.Stop()
 	}
 
 	// Now that the channel are open, simulate the start of a session by

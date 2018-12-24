@@ -256,6 +256,7 @@ func main() {
 		newAddressCommand,
 		sendManyCommand,
 		sendCoinsCommand,
+		listUnspentCommand,
 		connectCommand,
 		disconnectCommand,
 		openChannelCommand,
@@ -291,6 +292,9 @@ func main() {
 		updateChannelPolicyCommand,
 		forwardingHistoryCommand,
 	}
+
+	// Add any extra autopilot commands determined by build flags.
+	app.Commands = append(app.Commands, autopilotCommands()...)
 
 	if err := app.Run(os.Args); err != nil {
 		fatal(err)

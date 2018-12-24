@@ -11,12 +11,11 @@ import (
 	"net"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/wakiyamap/lnd/sweep"
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -39,6 +38,7 @@ import (
 	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/wakiyamap/lnd/nat"
 	"github.com/wakiyamap/lnd/routing"
+	"github.com/wakiyamap/lnd/sweep"
 	"github.com/wakiyamap/lnd/ticker"
 	"github.com/wakiyamap/lnd/tor"
 )
@@ -155,11 +155,15 @@ type server struct {
 
 	utxoNursery *utxoNursery
 
+	sweeper *sweep.UtxoSweeper
+
 	chainArb *contractcourt.ChainArbitrator
 
 	sphinx *htlcswitch.OnionProcessor
 
 	connMgr *connmgr.ConnManager
+
+	sigPool *lnwallet.SigPool
 
 	// globalFeatures feature vector which affects HTLCs and thus are also
 	// advertised to other nodes.
@@ -258,8 +262,9 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 	sphinxRouter := sphinx.NewRouter(privKey, activeNetParams.Params, replayLog)
 
 	s := &server{
-		chanDB: chanDB,
-		cc:     cc,
+		chanDB:  chanDB,
+		cc:      cc,
+		sigPool: lnwallet.NewSigPool(runtime.NumCPU()*2, cc.signer),
 
 		invoices: newInvoiceRegistry(chanDB),
 
@@ -593,24 +598,45 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 		return nil, err
 	}
 
-	sweeper := sweep.New(&sweep.UtxoSweeperConfig{
+	srvrLog.Tracef("Sweeper batch window duration: %v",
+		sweep.DefaultBatchWindowDuration)
+
+	sweeperStore, err := sweep.NewSweeperStore(
+		chanDB, activeNetParams.GenesisHash,
+	)
+	if err != nil {
+		srvrLog.Errorf("unable to create sweeper store: %v", err)
+		return nil, err
+	}
+
+	s.sweeper = sweep.New(&sweep.UtxoSweeperConfig{
 		Estimator: cc.feeEstimator,
 		GenSweepScript: func() ([]byte, error) {
 			return newSweepPkScript(cc.wallet)
 		},
-		Signer: cc.wallet.Cfg.Signer,
+		Signer:             cc.wallet.Cfg.Signer,
+		PublishTransaction: cc.wallet.PublishTransaction,
+		NewBatchTimer: func() <-chan time.Time {
+			return time.NewTimer(sweep.DefaultBatchWindowDuration).C
+		},
+		SweepTxConfTarget:    6,
+		Notifier:             cc.chainNotifier,
+		ChainIO:              cc.chainIO,
+		Store:                sweeperStore,
+		MaxInputsPerTx:       sweep.DefaultMaxInputsPerTx,
+		MaxSweepAttempts:     sweep.DefaultMaxSweepAttempts,
+		NextAttemptDeltaFunc: sweep.DefaultNextAttemptDeltaFunc,
 	})
 
 	s.utxoNursery = newUtxoNursery(&NurseryConfig{
 		ChainIO:             cc.chainIO,
 		ConfDepth:           1,
-		SweepTxConfTarget:   6,
 		FetchClosedChannels: chanDB.FetchClosedChannels,
 		FetchClosedChannel:  chanDB.FetchClosedChannel,
 		Notifier:            cc.chainNotifier,
 		PublishTransaction:  cc.wallet.PublishTransaction,
 		Store:               utxnStore,
-		Sweeper:             sweeper,
+		SweepInput:          s.sweeper.SweepInput,
 	})
 
 	// Construct a closure that wraps the htlcswitch's CloseLink method.
@@ -702,7 +728,7 @@ func newServer(listenAddrs []net.Addr, chanDB *channeldb.DB, cc *chainControl,
 		DisableChannel: func(op wire.OutPoint) error {
 			return s.announceChanStatus(op, true)
 		},
-		Sweeper: sweeper,
+		Sweeper: s.sweeper,
 	}, chanDB)
 
 	s.breachArbiter = newBreachArbiter(&BreachConfig{
@@ -947,6 +973,9 @@ func (s *server) Start() error {
 	// sufficient number of confirmations, or when the input for the
 	// funding transaction is spent in an attempt at an uncooperative close
 	// by the counterparty.
+	if err := s.sigPool.Start(); err != nil {
+		return err
+	}
 	if err := s.cc.chainNotifier.Start(); err != nil {
 		return err
 	}
@@ -954,6 +983,9 @@ func (s *server) Start() error {
 		return err
 	}
 	if err := s.htlcSwitch.Start(); err != nil {
+		return err
+	}
+	if err := s.sweeper.Start(); err != nil {
 		return err
 	}
 	if err := s.utxoNursery.Start(); err != nil {
@@ -1034,6 +1066,7 @@ func (s *server) Stop() error {
 	}
 
 	// Shutdown the wallet, funding manager, and the rpc server.
+	s.sigPool.Stop()
 	s.cc.chainNotifier.Stop()
 	s.chanRouter.Stop()
 	s.htlcSwitch.Stop()
@@ -1042,6 +1075,7 @@ func (s *server) Stop() error {
 	s.breachArbiter.Stop()
 	s.authGossiper.Stop()
 	s.chainArb.Stop()
+	s.sweeper.Stop()
 	s.cc.wallet.Shutdown()
 	s.cc.chainView.Stop()
 	s.connMgr.Stop()

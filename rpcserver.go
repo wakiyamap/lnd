@@ -27,6 +27,7 @@ import (
 	"github.com/coreos/bbolt"
 	"github.com/davecgh/go-spew/spew"
 	proxy "github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/wakiyamap/lnd/autopilot"
 	"github.com/wakiyamap/lnd/build"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/htlcswitch"
@@ -162,6 +163,10 @@ var (
 		"/lnrpc.Lightning/SendCoins": {{
 			Entity: "onchain",
 			Action: "write",
+		}},
+		"/lnrpc.Lightning/ListUnspent": {{
+			Entity: "onchain",
+			Action: "read",
 		}},
 		"/lnrpc.Lightning/SendMany": {{
 			Entity: "onchain",
@@ -388,7 +393,7 @@ var _ lnrpc.LightningServer = (*rpcServer)(nil)
 // like requiring TLS, etc.
 func newRPCServer(s *server, macService *macaroons.Service,
 	subServerCgs *subRPCServerConfigs, serverOpts []grpc.ServerOption,
-	restServerOpts []grpc.DialOption,
+	restServerOpts []grpc.DialOption, atpl *autopilot.Manager,
 	tlsCfg *tls.Config) (*rpcServer, error) {
 
 	var (
@@ -400,7 +405,7 @@ func newRPCServer(s *server, macService *macaroons.Service,
 	// the dependencies they need are properly populated within each sub
 	// server configuration struct.
 	err := subServerCgs.PopulateDependencies(
-		s.cc, networkDir, macService,
+		s.cc, networkDir, macService, atpl,
 	)
 	if err != nil {
 		return nil, err
@@ -680,6 +685,116 @@ func determineFeePerKw(feeEstimator lnwallet.FeeEstimator, targetConf int32,
 	}
 }
 
+// ListUnspent returns useful information about each unspent output owned by
+// the wallet, as reported by the underlying `ListUnspentWitness`; the
+// information returned is: outpoint, amount in satoshis, address, address
+// type, scriptPubKey in hex and number of confirmations.  The result is
+// filtered to contain outputs whose number of confirmations is between a
+// minimum and maximum number of confirmations specified by the user, with 0
+// meaning unconfirmed.
+func (r *rpcServer) ListUnspent(ctx context.Context,
+	in *lnrpc.ListUnspentRequest) (*lnrpc.ListUnspentResponse, error) {
+
+	minConfs := in.MinConfs
+	maxConfs := in.MaxConfs
+
+	switch {
+	// Ensure that the user didn't attempt to specify a negative number of
+	// confirmations, as that isn't possible.
+	case minConfs < 0:
+		return nil, fmt.Errorf("min confirmations must be >= 0")
+
+	// We'll also ensure that the min number of confs is strictly less than
+	// or equal to the max number of confs for sanity.
+	case minConfs > maxConfs:
+		return nil, fmt.Errorf("max confirmations must be >= min " +
+			"confirmations")
+	}
+
+	// With our arguments validated, we'll query the internal wallet for
+	// the set of UTXOs that match our query.
+	utxos, err := r.server.cc.wallet.ListUnspentWitness(minConfs, maxConfs)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &lnrpc.ListUnspentResponse{
+		Utxos: make([]*lnrpc.Utxo, 0, len(utxos)),
+	}
+
+	for _, utxo := range utxos {
+		// Translate lnwallet address type to the proper gRPC proto
+		// address type.
+		var addrType lnrpc.AddressType
+		switch utxo.AddressType {
+
+		case lnwallet.WitnessPubKey:
+			addrType = lnrpc.AddressType_WITNESS_PUBKEY_HASH
+
+		case lnwallet.NestedWitnessPubKey:
+			addrType = lnrpc.AddressType_NESTED_PUBKEY_HASH
+
+		case lnwallet.UnknownAddressType:
+			rpcsLog.Warnf("[listunspent] utxo with address of "+
+				"unknown type ignored: %v",
+				utxo.OutPoint.String())
+			continue
+
+		default:
+			return nil, fmt.Errorf("invalid utxo address type")
+		}
+
+		// Now that we know we have a proper mapping to an address,
+		// we'll convert the regular outpoint to an lnrpc variant.
+		outpoint := &lnrpc.ChannelPoint{
+			FundingTxid: &lnrpc.ChannelPoint_FundingTxidStr{
+				FundingTxidStr: utxo.OutPoint.Hash.String(),
+			},
+			OutputIndex: utxo.OutPoint.Index,
+		}
+
+		utxoResp := lnrpc.Utxo{
+			Type:          addrType,
+			AmountSat:     int64(utxo.Value),
+			ScriptPubkey:  hex.EncodeToString(utxo.PkScript),
+			Outpoint:      outpoint,
+			Confirmations: utxo.Confirmations,
+		}
+
+		// Finally, we'll attempt to extract the raw address from the
+		// script so we can display a human friendly address to the end
+		// user.
+		_, outAddresses, _, err := txscript.ExtractPkScriptAddrs(
+			utxo.PkScript, activeNetParams.Params,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		// If we can't properly locate a single address, then this was
+		// an error in our mapping, and we'll return an error back to
+		// the user.
+		if len(outAddresses) != 1 {
+			return nil, fmt.Errorf("an output was unexpectedly " +
+				"multisig")
+		}
+
+		utxoResp.Address = outAddresses[0].String()
+
+		resp.Utxos = append(resp.Utxos, &utxoResp)
+	}
+
+	maxStr := ""
+	if maxConfs != math.MaxInt32 {
+		maxStr = " max=" + fmt.Sprintf("%d", maxConfs)
+	}
+
+	rpcsLog.Debugf("[listunspent] min=%v%v, generated utxos: %v", minConfs,
+		maxStr, utxos)
+
+	return resp, nil
+}
+
 // SendCoins executes a request to send coins to a particular address. Unlike
 // SendMany, this RPC call only allows creating a single output at a time.
 func (r *rpcServer) SendCoins(ctx context.Context,
@@ -743,9 +858,9 @@ func (r *rpcServer) NewAddress(ctx context.Context,
 	// available address types.
 	var addrType lnwallet.AddressType
 	switch in.Type {
-	case lnrpc.NewAddressRequest_WITNESS_PUBKEY_HASH:
+	case lnrpc.AddressType_WITNESS_PUBKEY_HASH:
 		addrType = lnwallet.WitnessPubKey
-	case lnrpc.NewAddressRequest_NESTED_PUBKEY_HASH:
+	case lnrpc.AddressType_NESTED_PUBKEY_HASH:
 		addrType = lnwallet.NestedWitnessPubKey
 	}
 
@@ -1280,6 +1395,12 @@ func getChanPointFundingTxid(chanPoint *lnrpc.ChannelPoint) ([]byte, error) {
 func (r *rpcServer) CloseChannel(in *lnrpc.CloseChannelRequest,
 	updateStream lnrpc.Lightning_CloseChannelServer) error {
 
+	// If the user didn't specify a channel point, then we'll reject this
+	// request all together.
+	if in.GetChannelPoint() == nil {
+		return fmt.Errorf("must specify channel point in close channel")
+	}
+
 	force := in.Force
 	index := in.ChannelPoint.OutputIndex
 	txidHash, err := getChanPointFundingTxid(in.GetChannelPoint())
@@ -1310,7 +1431,6 @@ func (r *rpcServer) CloseChannel(in *lnrpc.CloseChannelRequest,
 	if err != nil {
 		return err
 	}
-	channel.Stop()
 
 	// If a force closure was requested, then we'll handle all the details
 	// around the creation and broadcast of the unilateral closure
@@ -1546,7 +1666,7 @@ func (r *rpcServer) fetchOpenDbChannel(chanPoint wire.OutPoint) (
 
 // fetchActiveChannel attempts to locate a channel identified by its channel
 // point from the database's set of all currently opened channels and
-// return it as a fully popuplated state machine
+// return it as a fully populated state machine
 func (r *rpcServer) fetchActiveChannel(chanPoint wire.OutPoint) (
 	*lnwallet.LightningChannel, error) {
 
@@ -1559,7 +1679,7 @@ func (r *rpcServer) fetchActiveChannel(chanPoint wire.OutPoint) (
 	// we create a fully populated channel state machine which
 	// uses the db channel as backing storage.
 	return lnwallet.NewLightningChannel(
-		r.server.cc.wallet.Cfg.Signer, nil, dbChan,
+		r.server.cc.wallet.Cfg.Signer, nil, dbChan, nil,
 	)
 }
 
@@ -3173,6 +3293,7 @@ func createRPCInvoice(invoice *channeldb.Invoice) (*lnrpc.Invoice, error) {
 		FallbackAddr:    fallbackAddr,
 		RouteHints:      routeHints,
 		AddIndex:        invoice.AddIndex,
+		Private:         len(routeHints) > 0,
 		SettleIndex:     invoice.SettleIndex,
 		AmtPaidSat:      int64(satAmtPaid),
 		AmtPaidMsat:     int64(invoice.AmtPaid),
@@ -4572,6 +4693,7 @@ func (r *rpcServer) ForwardingHistory(ctx context.Context,
 	for i, event := range timeSlice.ForwardingEvents {
 		amtInSat := event.AmtIn.ToSatoshis()
 		amtOutSat := event.AmtOut.ToSatoshis()
+		feeMsat := event.AmtIn - event.AmtOut
 
 		resp.ForwardingEvents[i] = &lnrpc.ForwardingEvent{
 			Timestamp: uint64(event.Timestamp.Unix()),
@@ -4579,7 +4701,8 @@ func (r *rpcServer) ForwardingHistory(ctx context.Context,
 			ChanIdOut: event.OutgoingChanID.ToUint64(),
 			AmtIn:     uint64(amtInSat),
 			AmtOut:    uint64(amtOutSat),
-			Fee:       uint64(amtInSat - amtOutSat),
+			Fee:       uint64(feeMsat.ToSatoshis()),
+			FeeMsat:   uint64(feeMsat),
 		}
 	}
 
