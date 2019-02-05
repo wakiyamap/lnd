@@ -49,10 +49,11 @@ const (
 	defaultRPCHost             = "localhost"
 	defaultMaxPendingChannels  = 1
 	defaultNoSeedBackup        = false
-	defaultTrickleDelay        = 30 * 1000
+	defaultTrickleDelay        = 90 * 1000
 	defaultInactiveChanTimeout = 20 * time.Minute
 	defaultMaxLogFiles         = 3
 	defaultMaxLogFileSize      = 10
+	defaultMinBackoff          = time.Second
 	defaultMaxBackoff          = time.Hour
 
 	defaultTorSOCKSPort            = 9050
@@ -141,13 +142,14 @@ type bitcoindConfig struct {
 }
 
 type autoPilotConfig struct {
-	Active         bool    `long:"active" description:"If the autopilot agent should be active or not."`
-	MaxChannels    int     `long:"maxchannels" description:"The maximum number of channels that should be created"`
-	Allocation     float64 `long:"allocation" description:"The percentage of total funds that should be committed to automatic channel establishment"`
-	MinChannelSize int64   `long:"minchansize" description:"The smallest channel that the autopilot agent should create"`
-	MaxChannelSize int64   `long:"maxchansize" description:"The largest channel that the autopilot agent should create"`
-	Private        bool    `long:"private" description:"Whether the channels created by the autopilot agent should be private or not. Private channels won't be announced to the network."`
-	MinConfs       int32   `long:"minconfs" description:"The minimum number of confirmations each of your inputs in funding transactions created by the autopilot agent must have."`
+	Active         bool               `long:"active" description:"If the autopilot agent should be active or not."`
+	Heuristic      map[string]float64 `long:"heuristic" description:"Heuristic to activate, and the weight to give it during scoring."`
+	MaxChannels    int                `long:"maxchannels" description:"The maximum number of channels that should be created"`
+	Allocation     float64            `long:"allocation" description:"The percentage of total funds that should be committed to automatic channel establishment"`
+	MinChannelSize int64              `long:"minchansize" description:"The smallest channel that the autopilot agent should create"`
+	MaxChannelSize int64              `long:"maxchansize" description:"The largest channel that the autopilot agent should create"`
+	Private        bool               `long:"private" description:"Whether the channels created by the autopilot agent should be private or not. Private channels won't be announced to the network."`
+	MinConfs       int32              `long:"minconfs" description:"The minimum number of confirmations each of your inputs in funding transactions created by the autopilot agent must have."`
 }
 
 type torConfig struct {
@@ -197,6 +199,7 @@ type config struct {
 	ExternalIPs      []net.Addr
 	DisableListen    bool          `long:"nolisten" description:"Disable listening for incoming peer connections"`
 	NAT              bool          `long:"nat" description:"Toggle NAT traversal support (using either UPnP or NAT-PMP) to automatically advertise your external IP address to the network -- NOTE this does not support devices behind multiple NATs"`
+	MinBackoff       time.Duration `long:"minbackoff" description:"Shortest backoff when reconnecting to persistent peers. Valid time units are {s, m, h}."`
 	MaxBackoff       time.Duration `long:"maxbackoff" description:"Longest backoff when reconnecting to persistent peers. Valid time units are {s, m, h}."`
 
 	DebugLevel string `short:"d" long:"debuglevel" description:"Logging level for all subsystems {trace, debug, info, warn, error, critical} -- You may also specify <subsystem>=<level>,<subsystem2>=<level>,... to set the log level for individual subsystems -- Use show to list available subsystems"`
@@ -300,6 +303,7 @@ func loadConfig() (*config, error) {
 		},
 		MaxPendingChannels: defaultMaxPendingChannels,
 		NoSeedBackup:       defaultNoSeedBackup,
+		MinBackoff:         defaultMinBackoff,
 		MaxBackoff:         defaultMaxBackoff,
 		SubRPCServers: &subRPCServerConfigs{
 			SignRPC: &signrpc.Config{},
@@ -309,6 +313,9 @@ func loadConfig() (*config, error) {
 			Allocation:     0.6,
 			MinChannelSize: int64(minChanFundingSize),
 			MaxChannelSize: int64(maxFundingAmount),
+			Heuristic: map[string]float64{
+				"preferential": 1.0,
+			},
 		},
 		TrickleDelay:        defaultTrickleDelay,
 		InactiveChanTimeout: defaultInactiveChanTimeout,
@@ -458,6 +465,10 @@ func loadConfig() (*config, error) {
 	}
 	if cfg.Autopilot.MaxChannelSize > int64(maxFundingAmount) {
 		cfg.Autopilot.MaxChannelSize = int64(maxFundingAmount)
+	}
+
+	if _, err := validateAtplCfg(cfg.Autopilot); err != nil {
+		return nil, err
 	}
 
 	// Validate the Tor config parameters.
@@ -956,6 +967,13 @@ func loadConfig() (*config, error) {
 				"on localhost when running with Tor inbound " +
 				"support enabled")
 		}
+	}
+
+	// Ensure that the specified minimum backoff is below or equal to the
+	// maximum backoff.
+	if cfg.MinBackoff > cfg.MaxBackoff {
+		return nil, fmt.Errorf("maxbackoff must be greater than " +
+			"minbackoff")
 	}
 
 	// Finally, ensure that the user's color is correctly formatted,

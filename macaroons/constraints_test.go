@@ -1,11 +1,12 @@
 package macaroons_test
 
 import (
-"github.com/wakiyamap/lnd/macaroons"
-	"gopkg.in/macaroon.v2"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wakiyamap/lnd/macaroons"
+	macaroon "gopkg.in/macaroon.v2"
 )
 
 var (

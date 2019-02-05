@@ -4,8 +4,12 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/wakiyamap/lnd/autopilot"
+	"github.com/wakiyamap/lnd/invoices"
 	"github.com/wakiyamap/lnd/lnrpc/autopilotrpc"
+	"github.com/wakiyamap/lnd/lnrpc/chainrpc"
+	"github.com/wakiyamap/lnd/lnrpc/invoicesrpc"
 	"github.com/wakiyamap/lnd/lnrpc/signrpc"
 	"github.com/wakiyamap/lnd/lnrpc/walletrpc"
 	"github.com/wakiyamap/lnd/macaroons"
@@ -31,6 +35,15 @@ type subRPCServerConfigs struct {
 	// AutopilotRPC is a sub-RPC server that exposes methods on the running
 	// autopilot as a gRPC service.
 	AutopilotRPC *autopilotrpc.Config `group:"autopilotrpc" namespace:"autopilotrpc"`
+
+	// ChainRPC is a sub-RPC server that exposes functionality allowing a
+	// client to be notified of certain on-chain events (new blocks,
+	// confirmations, spends).
+	ChainRPC *chainrpc.Config `group:"chainrpc" namespace:"chainrpc"`
+
+	// InvoicesRPC is a sub-RPC server that exposes invoice related methods
+	// as a gRPC service.
+	InvoicesRPC *invoicesrpc.Config `group:"invoicesrpc" namespace:"invoicesrpc"`
 }
 
 // PopulateDependencies attempts to iterate through all the sub-server configs
@@ -41,7 +54,9 @@ type subRPCServerConfigs struct {
 // FetchConfig method.
 func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 	networkDir string, macService *macaroons.Service,
-	atpl *autopilot.Manager) error {
+	atpl *autopilot.Manager,
+	invoiceRegistry *invoices.InvoiceRegistry,
+	activeNetParams *chaincfg.Params) error {
 
 	// First, we'll use reflect to obtain a version of the config struct
 	// that allows us to programmatically inspect its fields.
@@ -104,6 +119,35 @@ func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 
 			subCfgValue.FieldByName("Manager").Set(
 				reflect.ValueOf(atpl),
+			)
+
+		case *chainrpc.Config:
+			subCfgValue := extractReflectValue(cfg)
+
+			subCfgValue.FieldByName("NetworkDir").Set(
+				reflect.ValueOf(networkDir),
+			)
+			subCfgValue.FieldByName("MacService").Set(
+				reflect.ValueOf(macService),
+			)
+			subCfgValue.FieldByName("ChainNotifier").Set(
+				reflect.ValueOf(cc.chainNotifier),
+			)
+
+		case *invoicesrpc.Config:
+			subCfgValue := extractReflectValue(cfg)
+
+			subCfgValue.FieldByName("NetworkDir").Set(
+				reflect.ValueOf(networkDir),
+			)
+			subCfgValue.FieldByName("MacService").Set(
+				reflect.ValueOf(macService),
+			)
+			subCfgValue.FieldByName("InvoiceRegistry").Set(
+				reflect.ValueOf(invoiceRegistry),
+			)
+			subCfgValue.FieldByName("ChainParams").Set(
+				reflect.ValueOf(activeNetParams),
 			)
 
 		default:

@@ -10,7 +10,6 @@ import (
 	"github.com/btcsuite/btcutil"
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/htlcswitch"
-	"github.com/wakiyamap/lnd/lnrpc"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
 )
@@ -121,7 +120,7 @@ func TestPeerChannelClosureAcceptFeeInitiator(t *testing.T) {
 	defer cleanUp()
 
 	// We make the initiator send a shutdown request.
-	updateChan := make(chan *lnrpc.CloseStatusUpdate, 1)
+	updateChan := make(chan interface{}, 1)
 	errChan := make(chan error, 1)
 	closeCommand := &htlcswitch.ChanClose{
 		CloseType:      htlcswitch.CloseRegular,
@@ -410,7 +409,7 @@ func TestPeerChannelClosureFeeNegotiationsInitiator(t *testing.T) {
 	defer cleanUp()
 
 	// We make the initiator send a shutdown request.
-	updateChan := make(chan *lnrpc.CloseStatusUpdate, 1)
+	updateChan := make(chan interface{}, 1)
 	errChan := make(chan error, 1)
 	closeCommand := &htlcswitch.ChanClose{
 		CloseType:      htlcswitch.CloseRegular,

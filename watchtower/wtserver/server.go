@@ -11,9 +11,12 @@ import (
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/connmgr"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcutil"
 	"github.com/wakiyamap/lnd/lnwire"
+	"github.com/wakiyamap/lnd/watchtower/blob"
 	"github.com/wakiyamap/lnd/watchtower/wtdb"
+	"github.com/wakiyamap/lnd/watchtower/wtpolicy"
 	"github.com/wakiyamap/lnd/watchtower/wtwire"
 )
 
@@ -186,9 +189,15 @@ func (s *Server) handleClient(peer Peer) {
 		peer.Close()
 		return
 	}
-	defer s.removePeer(&id)
+	defer s.removePeer(&id, peer.RemoteAddr())
 
 	msg, err := s.readMessage(peer)
+	if err != nil {
+		log.Errorf("Unable to read message from client %s@%s: %v",
+			id, peer.RemoteAddr(), err)
+		return
+	}
+
 	remoteInit, ok := msg.(*wtwire.Init)
 	if !ok {
 		log.Errorf("Client %s@%s did not send Init msg as first "+
@@ -244,16 +253,10 @@ func (s *Server) handleClient(peer Peer) {
 				return
 			}
 
-			log.Infof("Received CreateSession from %s, "+
-				"version=%d nupdates=%d rewardrate=%d "+
-				"sweepfeerate=%d", id, msg.BlobVersion,
-				msg.MaxUpdates, msg.RewardRate,
-				msg.SweepFeeRate)
-
 			// Attempt to open a new session for this client.
 			err := s.handleCreateSession(peer, &id, msg)
 			if err != nil {
-				log.Errorf("unable to handle CreateSession "+
+				log.Errorf("Unable to handle CreateSession "+
 					"from %s: %v", id, err)
 			}
 
@@ -263,11 +266,6 @@ func (s *Server) handleClient(peer Peer) {
 		// A StateUpdate indicates an existing client attempting to
 		// back-up a revoked commitment state.
 		case *wtwire.StateUpdate:
-			log.Infof("Received SessionUpdate from %s, seqnum=%d "+
-				"lastapplied=%d complete=%v hint=%x", id,
-				msg.SeqNum, msg.LastApplied, msg.IsComplete,
-				msg.Hint[:])
-
 			// Try to accept the state update from the client.
 			err := s.handleStateUpdate(peer, &id, msg)
 			if err != nil {
@@ -327,7 +325,7 @@ func (s *Server) handleInit(localInit, remoteInit *wtwire.Init) error {
 // session info is known about the session id. If an existing session is found,
 // the reward address is returned in case the client lost our reply.
 func (s *Server) handleCreateSession(peer Peer, id *wtdb.SessionID,
-	init *wtwire.CreateSession) error {
+	req *wtwire.CreateSession) error {
 
 	// TODO(conner): validate accept against policy
 
@@ -343,7 +341,7 @@ func (s *Server) handleCreateSession(peer Peer, id *wtdb.SessionID,
 		log.Debugf("Already have session for %s", id)
 		return s.replyCreateSession(
 			peer, id, wtwire.CreateSessionCodeAlreadyExists,
-			[]byte(existingInfo.RewardAddress),
+			existingInfo.RewardAddress,
 		)
 
 	// Some other database error occurred, return a temporary failure.
@@ -367,19 +365,39 @@ func (s *Server) handleCreateSession(peer Peer, id *wtdb.SessionID,
 		)
 	}
 
-	rewardAddrBytes := rewardAddress.ScriptAddress()
+	// Construct the pkscript the client should pay to when signing justice
+	// transactions for this session.
+	rewardScript, err := txscript.PayToAddrScript(rewardAddress)
+	if err != nil {
+		log.Errorf("unable to generate reward script for %s", id)
+		return s.replyCreateSession(
+			peer, id, wtwire.CodeTemporaryFailure, nil,
+		)
+	}
+
+	// Ensure that the requested blob type is supported by our tower.
+	if !blob.IsSupportedType(req.BlobType) {
+		log.Debugf("Rejecting CreateSession from %s, unsupported blob "+
+			"type %s", id, req.BlobType)
+		return s.replyCreateSession(
+			peer, id, wtwire.CreateSessionCodeRejectBlobType, nil,
+		)
+	}
 
 	// TODO(conner): create invoice for upfront payment
 
 	// Assemble the session info using the agreed upon parameters, reward
 	// address, and session id.
 	info := wtdb.SessionInfo{
-		ID:            *id,
-		Version:       init.BlobVersion,
-		MaxUpdates:    init.MaxUpdates,
-		RewardRate:    init.RewardRate,
-		SweepFeeRate:  init.SweepFeeRate,
-		RewardAddress: rewardAddrBytes,
+		ID: *id,
+		Policy: wtpolicy.Policy{
+			BlobType:     req.BlobType,
+			MaxUpdates:   req.MaxUpdates,
+			RewardBase:   req.RewardBase,
+			RewardRate:   req.RewardRate,
+			SweepFeeRate: req.SweepFeeRate,
+		},
+		RewardAddress: rewardScript,
 	}
 
 	// Insert the session info into the watchtower's database. If
@@ -395,7 +413,7 @@ func (s *Server) handleCreateSession(peer Peer, id *wtdb.SessionID,
 	log.Infof("Accepted session for %s", id)
 
 	return s.replyCreateSession(
-		peer, id, wtwire.CodeOK, rewardAddrBytes,
+		peer, id, wtwire.CodeOK, rewardScript,
 	)
 }
 
@@ -424,7 +442,7 @@ func (s *Server) handleStateUpdate(peer Peer, id *wtdb.SessionID,
 	lastApplied, err = s.cfg.DB.InsertStateUpdate(&sessionUpdate)
 	switch {
 	case err == nil:
-		log.Infof("State update %d accepted for %s",
+		log.Debugf("State update %d accepted for %s",
 			update.SeqNum, id)
 
 		failCode = wtwire.CodeOK
@@ -555,13 +573,15 @@ func (s *Server) readMessage(peer Peer) (wtwire.Message, error) {
 	}
 
 	msgReader := bytes.NewReader(rawMsg)
-	nextMsg, err := wtwire.ReadMessage(msgReader, 0)
+	msg, err := wtwire.ReadMessage(msgReader, 0)
 	if err != nil {
 		err = fmt.Errorf("unable to parse message: %v", err)
 		return nil, err
 	}
 
-	return nextMsg, nil
+	logMessage(peer, msg, true)
+
+	return msg, nil
 }
 
 // sendMessage sends a watchtower wire message to the target peer.
@@ -580,6 +600,8 @@ func (s *Server) sendMessage(peer Peer, msg wtwire.Message) error {
 		err = fmt.Errorf("unable to set write deadline: %v", err)
 		return err
 	}
+
+	logMessage(peer, msg, false)
 
 	_, err = peer.Write(b.Bytes())
 	return err
@@ -606,8 +628,8 @@ func (s *Server) addPeer(id *wtdb.SessionID, peer Peer) error {
 
 // removePeer deletes a client from the server's client map. If a peer is found,
 // this method will close the peer's connection.
-func (s *Server) removePeer(id *wtdb.SessionID) {
-	log.Infof("Releasing incoming peer %s", id)
+func (s *Server) removePeer(id *wtdb.SessionID, addr net.Addr) {
+	log.Infof("Releasing incoming peer %s@%s", id, addr)
 
 	s.clientMtx.Lock()
 	peer, ok := s.clients[*id]
@@ -617,6 +639,27 @@ func (s *Server) removePeer(id *wtdb.SessionID) {
 	if ok {
 		peer.Close()
 	}
+}
+
+// logMessage writes information about a message exchanged with a remote peer,
+// using directional prepositions to signal whether the message was sent or
+// received.
+func logMessage(peer Peer, msg wtwire.Message, read bool) {
+	var action = "Received"
+	var preposition = "from"
+	if !read {
+		action = "Sending"
+		preposition = "to"
+	}
+
+	summary := wtwire.MessageSummary(msg)
+	if len(summary) > 0 {
+		summary = "(" + summary + ")"
+	}
+
+	log.Debugf("%s %s%v %s %x@%s", action, msg.MsgType(), summary,
+		preposition, peer.RemotePub().SerializeCompressed(),
+		peer.RemoteAddr())
 }
 
 // noDial is a dummy dial method passed to the server's connmgr.

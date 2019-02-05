@@ -13,9 +13,10 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/wakiyamap/lnd/input"
 	"github.com/wakiyamap/lnd/keychain"
 	"github.com/wakiyamap/lnd/lnrpc"
-	"github.com/wakiyamap/lnd/lnwallet"
+
 	"google.golang.org/grpc"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 )
@@ -68,16 +69,6 @@ type Server struct {
 // gRPC service.
 var _ SignerServer = (*Server)(nil)
 
-// fileExists reports whether the named file or directory exists.
-func fileExists(name string) bool {
-	if _, err := os.Stat(name); err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
-	}
-	return true
-}
-
 // New returns a new instance of the signrpc Signer sub-server. We also return
 // the set of permissions for the macaroons that we may create within this
 // method. If the macaroons we need aren't found in the filepath, then we'll
@@ -95,7 +86,7 @@ func New(cfg *Config) (*Server, lnrpc.MacaroonPerms, error) {
 	// Now that we know the full path of the signer macaroon, we can check
 	// to see if we need to create it or not.
 	macFilePath := cfg.SignerMacPath
-	if cfg.MacService != nil && !fileExists(macFilePath) {
+	if cfg.MacService != nil && !lnrpc.FileExists(macFilePath) {
 		log.Infof("Making macaroons for Signer RPC Server at: %v",
 			macFilePath)
 
@@ -206,7 +197,7 @@ func (s *Server) SignOutputRaw(ctx context.Context, in *SignReq) (*SignResp, err
 
 	// With the transaction deserialized, we'll now convert sign descs so
 	// we can feed it into the actual signer.
-	signDescs := make([]*lnwallet.SignDescriptor, 0, len(in.SignDescs))
+	signDescs := make([]*input.SignDescriptor, 0, len(in.SignDescs))
 	for _, signDesc := range in.SignDescs {
 		keyDesc := signDesc.KeyDesc
 
@@ -278,7 +269,7 @@ func (s *Server) SignOutputRaw(ctx context.Context, in *SignReq) (*SignResp, err
 		// Finally, with verification and parsing complete, we can
 		// construct the final sign descriptor to generate the proper
 		// signature for this input.
-		signDescs = append(signDescs, &lnwallet.SignDescriptor{
+		signDescs = append(signDescs, &input.SignDescriptor{
 			KeyDesc: keychain.KeyDescriptor{
 				KeyLocator: keyLoc,
 				PubKey:     targetPubKey,
@@ -353,13 +344,13 @@ func (s *Server) ComputeInputScript(ctx context.Context,
 
 	sigHashCache := txscript.NewTxSigHashes(&txToSign)
 
-	signDescs := make([]*lnwallet.SignDescriptor, 0, len(in.SignDescs))
+	signDescs := make([]*input.SignDescriptor, 0, len(in.SignDescs))
 	for _, signDesc := range in.SignDescs {
 		// For this method, the only fields that we care about are the
 		// hash type, and the information concerning the output as we
 		// only know how to provide full witnesses for outputs that we
 		// solely control.
-		signDescs = append(signDescs, &lnwallet.SignDescriptor{
+		signDescs = append(signDescs, &input.SignDescriptor{
 			Output: &wire.TxOut{
 				Value:    signDesc.Output.Value,
 				PkScript: signDesc.Output.PkScript,
@@ -386,7 +377,7 @@ func (s *Server) ComputeInputScript(ctx context.Context,
 
 		resp.InputScripts[i] = &InputScript{
 			Witness:   inputScript.Witness,
-			SigScript: inputScript.ScriptSig,
+			SigScript: inputScript.SigScript,
 		}
 	}
 

@@ -10,7 +10,6 @@ import (
 	"github.com/btcsuite/btclog"
 	"github.com/jrick/logrotate/rotator"
 	"github.com/lightninglabs/neutrino"
-
 	"github.com/wakiyamap/lightning-onion"
 	"github.com/wakiyamap/lnd/autopilot"
 	"github.com/wakiyamap/lnd/build"
@@ -19,13 +18,18 @@ import (
 	"github.com/wakiyamap/lnd/contractcourt"
 	"github.com/wakiyamap/lnd/discovery"
 	"github.com/wakiyamap/lnd/htlcswitch"
+	"github.com/wakiyamap/lnd/invoices"
 	"github.com/wakiyamap/lnd/lnrpc/autopilotrpc"
+	"github.com/wakiyamap/lnd/lnrpc/chainrpc"
+	"github.com/wakiyamap/lnd/lnrpc/invoicesrpc"
 	"github.com/wakiyamap/lnd/lnrpc/signrpc"
 	"github.com/wakiyamap/lnd/lnrpc/walletrpc"
 	"github.com/wakiyamap/lnd/lnwallet"
+	"github.com/wakiyamap/lnd/netann"
 	"github.com/wakiyamap/lnd/routing"
 	"github.com/wakiyamap/lnd/signal"
 	"github.com/wakiyamap/lnd/sweep"
+	"github.com/wakiyamap/lnd/watchtower"
 )
 
 // Loggers per subsystem.  A single backend logger is created and all subsystem
@@ -71,6 +75,11 @@ var (
 	sgnrLog = build.NewSubLogger("SGNR", backendLog.Logger)
 	wlktLog = build.NewSubLogger("WLKT", backendLog.Logger)
 	arpcLog = build.NewSubLogger("ARPC", backendLog.Logger)
+	invcLog = build.NewSubLogger("INVC", backendLog.Logger)
+	nannLog = build.NewSubLogger("NANN", backendLog.Logger)
+	wtwrLog = build.NewSubLogger("WTWR", backendLog.Logger)
+	ntfrLog = build.NewSubLogger("NTFR", backendLog.Logger)
+	irpcLog = build.NewSubLogger("IRPC", backendLog.Logger)
 )
 
 // Initialize package-global logger variables.
@@ -91,6 +100,11 @@ func init() {
 	signrpc.UseLogger(sgnrLog)
 	walletrpc.UseLogger(wlktLog)
 	autopilotrpc.UseLogger(arpcLog)
+	invoices.UseLogger(invcLog)
+	netann.UseLogger(nannLog)
+	watchtower.UseLogger(wtwrLog)
+	chainrpc.UseLogger(ntfrLog)
+	invoicesrpc.UseLogger(irpcLog)
 }
 
 // subsystemLoggers maps each subsystem identifier to its associated logger.
@@ -117,6 +131,11 @@ var subsystemLoggers = map[string]btclog.Logger{
 	"SGNR": sgnrLog,
 	"WLKT": wlktLog,
 	"ARPC": arpcLog,
+	"INVC": invcLog,
+	"NANN": nannLog,
+	"WTWR": wtwrLog,
+	"NTFR": ntfnLog,
+	"IRPC": irpcLog,
 }
 
 // initLogRotator initializes the logging rotator to write logs to logFile and

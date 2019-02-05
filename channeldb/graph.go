@@ -483,101 +483,105 @@ func (c *ChannelGraph) deleteLightningNode(nodes *bbolt.Bucket,
 // the channel supports. The chanPoint and chanID are used to uniquely identify
 // the edge globally within the database.
 func (c *ChannelGraph) AddChannelEdge(edge *ChannelEdgeInfo) error {
+	return c.db.Update(func(tx *bbolt.Tx) error {
+		return c.addChannelEdge(tx, edge)
+	})
+}
+
+// addChannelEdge is the private form of AddChannelEdge that allows callers to
+// utilize an existing db transaction.
+func (c *ChannelGraph) addChannelEdge(tx *bbolt.Tx, edge *ChannelEdgeInfo) error {
 	// Construct the channel's primary key which is the 8-byte channel ID.
 	var chanKey [8]byte
 	binary.BigEndian.PutUint64(chanKey[:], edge.ChannelID)
 
-	return c.db.Update(func(tx *bbolt.Tx) error {
-		nodes, err := tx.CreateBucketIfNotExists(nodeBucket)
+	nodes, err := tx.CreateBucketIfNotExists(nodeBucket)
+	if err != nil {
+		return err
+	}
+	edges, err := tx.CreateBucketIfNotExists(edgeBucket)
+	if err != nil {
+		return err
+	}
+	edgeIndex, err := edges.CreateBucketIfNotExists(edgeIndexBucket)
+	if err != nil {
+		return err
+	}
+	chanIndex, err := edges.CreateBucketIfNotExists(channelPointBucket)
+	if err != nil {
+		return err
+	}
+
+	// First, attempt to check if this edge has already been created. If
+	// so, then we can exit early as this method is meant to be idempotent.
+	if edgeInfo := edgeIndex.Get(chanKey[:]); edgeInfo != nil {
+		return ErrEdgeAlreadyExist
+	}
+
+	// Before we insert the channel into the database, we'll ensure that
+	// both nodes already exist in the channel graph. If either node
+	// doesn't, then we'll insert a "shell" node that just includes its
+	// public key, so subsequent validation and queries can work properly.
+	_, node1Err := fetchLightningNode(nodes, edge.NodeKey1Bytes[:])
+	switch {
+	case node1Err == ErrGraphNodeNotFound:
+		node1Shell := LightningNode{
+			PubKeyBytes:          edge.NodeKey1Bytes,
+			HaveNodeAnnouncement: false,
+		}
+		err := addLightningNode(tx, &node1Shell)
+		if err != nil {
+			return fmt.Errorf("unable to create shell node "+
+				"for: %x", edge.NodeKey1Bytes)
+
+		}
+	case node1Err != nil:
+		return err
+	}
+
+	_, node2Err := fetchLightningNode(nodes, edge.NodeKey2Bytes[:])
+	switch {
+	case node2Err == ErrGraphNodeNotFound:
+		node2Shell := LightningNode{
+			PubKeyBytes:          edge.NodeKey2Bytes,
+			HaveNodeAnnouncement: false,
+		}
+		err := addLightningNode(tx, &node2Shell)
+		if err != nil {
+			return fmt.Errorf("unable to create shell node "+
+				"for: %x", edge.NodeKey2Bytes)
+
+		}
+	case node2Err != nil:
+		return err
+	}
+
+	// If the edge hasn't been created yet, then we'll first add it to the
+	// edge index in order to associate the edge between two nodes and also
+	// store the static components of the channel.
+	if err := putChanEdgeInfo(edgeIndex, edge, chanKey); err != nil {
+		return err
+	}
+
+	// Mark edge policies for both sides as unknown. This is to enable
+	// efficient incoming channel lookup for a node.
+	for _, key := range []*[33]byte{&edge.NodeKey1Bytes,
+		&edge.NodeKey2Bytes} {
+
+		err := putChanEdgePolicyUnknown(edges, edge.ChannelID,
+			key[:])
 		if err != nil {
 			return err
 		}
-		edges, err := tx.CreateBucketIfNotExists(edgeBucket)
-		if err != nil {
-			return err
-		}
-		edgeIndex, err := edges.CreateBucketIfNotExists(edgeIndexBucket)
-		if err != nil {
-			return err
-		}
-		chanIndex, err := edges.CreateBucketIfNotExists(channelPointBucket)
-		if err != nil {
-			return err
-		}
+	}
 
-		// First, attempt to check if this edge has already been
-		// created. If so, then we can exit early as this method is
-		// meant to be idempotent.
-		if edgeInfo := edgeIndex.Get(chanKey[:]); edgeInfo != nil {
-			return ErrEdgeAlreadyExist
-		}
-
-		// Before we insert the channel into the database, we'll ensure
-		// that both nodes already exist in the channel graph. If
-		// either node doesn't, then we'll insert a "shell" node that
-		// just includes its public key, so subsequent validation and
-		// queries can work properly.
-		_, node1Err := fetchLightningNode(nodes, edge.NodeKey1Bytes[:])
-		switch {
-		case node1Err == ErrGraphNodeNotFound:
-			node1Shell := LightningNode{
-				PubKeyBytes:          edge.NodeKey1Bytes,
-				HaveNodeAnnouncement: false,
-			}
-			err := addLightningNode(tx, &node1Shell)
-			if err != nil {
-				return fmt.Errorf("unable to create shell node "+
-					"for: %x", edge.NodeKey1Bytes)
-
-			}
-		case node1Err != nil:
-			return err
-		}
-
-		_, node2Err := fetchLightningNode(nodes, edge.NodeKey2Bytes[:])
-		switch {
-		case node2Err == ErrGraphNodeNotFound:
-			node2Shell := LightningNode{
-				PubKeyBytes:          edge.NodeKey2Bytes,
-				HaveNodeAnnouncement: false,
-			}
-			err := addLightningNode(tx, &node2Shell)
-			if err != nil {
-				return fmt.Errorf("unable to create shell node "+
-					"for: %x", edge.NodeKey2Bytes)
-
-			}
-		case node2Err != nil:
-			return err
-		}
-
-		// If the edge hasn't been created yet, then we'll first add it
-		// to the edge index in order to associate the edge between two
-		// nodes and also store the static components of the channel.
-		if err := putChanEdgeInfo(edgeIndex, edge, chanKey); err != nil {
-			return err
-		}
-
-		// Mark edge policies for both sides as unknown. This is to
-		// enable efficient incoming channel lookup for a node.
-		for _, key := range []*[33]byte{&edge.NodeKey1Bytes,
-			&edge.NodeKey2Bytes} {
-
-			err := putChanEdgePolicyUnknown(edges, edge.ChannelID,
-				key[:])
-			if err != nil {
-				return err
-			}
-		}
-
-		// Finally we add it to the channel index which maps channel
-		// points (outpoints) to the shorter channel ID's.
-		var b bytes.Buffer
-		if err := writeOutpoint(&b, &edge.ChannelPoint); err != nil {
-			return err
-		}
-		return chanIndex.Put(b.Bytes(), chanKey[:])
-	})
+	// Finally we add it to the channel index which maps channel points
+	// (outpoints) to the shorter channel ID's.
+	var b bytes.Buffer
+	if err := writeOutpoint(&b, &edge.ChannelPoint); err != nil {
+		return err
+	}
+	return chanIndex.Put(b.Bytes(), chanKey[:])
 }
 
 // HasChannelEdge returns true if the database knows of a channel edge with the
@@ -1639,28 +1643,26 @@ func delChannelByEdge(edges *bbolt.Bucket, edgeIndex *bbolt.Bucket,
 // the nodes on either side of the channel.
 func (c *ChannelGraph) UpdateEdgePolicy(edge *ChannelEdgePolicy) error {
 	return c.db.Update(func(tx *bbolt.Tx) error {
-		edges := tx.Bucket(edgeBucket)
-		if edge == nil {
-			return ErrEdgeNotFound
-		}
-
-		edgeIndex := edges.Bucket(edgeIndexBucket)
-		if edgeIndex == nil {
-			return ErrEdgeNotFound
-		}
-		nodes, err := tx.CreateBucketIfNotExists(nodeBucket)
-		if err != nil {
-			return err
-		}
-
-		return updateEdgePolicy(edges, edgeIndex, nodes, edge)
+		return updateEdgePolicy(tx, edge)
 	})
 }
 
 // updateEdgePolicy attempts to update an edge's policy within the relevant
 // buckets using an existing database transaction.
-func updateEdgePolicy(edges, edgeIndex, nodes *bbolt.Bucket,
-	edge *ChannelEdgePolicy) error {
+func updateEdgePolicy(tx *bbolt.Tx, edge *ChannelEdgePolicy) error {
+	edges := tx.Bucket(edgeBucket)
+	if edges == nil {
+		return ErrEdgeNotFound
+
+	}
+	edgeIndex := edges.Bucket(edgeIndexBucket)
+	if edgeIndex == nil {
+		return ErrEdgeNotFound
+	}
+	nodes, err := tx.CreateBucketIfNotExists(nodeBucket)
+	if err != nil {
+		return err
+	}
 
 	// Create the channelID key be converting the channel ID
 	// integer into a byte slice.
@@ -1677,7 +1679,7 @@ func updateEdgePolicy(edges, edgeIndex, nodes *bbolt.Bucket,
 	// Depending on the flags value passed above, either the first
 	// or second edge policy is being updated.
 	var fromNode, toNode []byte
-	if edge.Flags&lnwire.ChanUpdateDirection == 0 {
+	if edge.ChannelFlags&lnwire.ChanUpdateDirection == 0 {
 		fromNode = nodeInfo[:33]
 		toNode = nodeInfo[33:66]
 	} else {
@@ -2422,9 +2424,13 @@ type ChannelEdgePolicy struct {
 	// was received.
 	LastUpdate time.Time
 
-	// Flags is a bitfield which signals the capabilities of the channel as
-	// well as the directed edge this update applies to.
-	Flags lnwire.ChanUpdateFlag
+	// MessageFlags is a bitfield which indicates the presence of optional
+	// fields (like max_htlc) in the policy.
+	MessageFlags lnwire.ChanUpdateMsgFlags
+
+	// ChannelFlags is a bitfield which signals the capabilities of the
+	// channel as well as the directed edge this update applies to.
+	ChannelFlags lnwire.ChanUpdateChanFlags
 
 	// TimeLockDelta is the number of blocks this node will subtract from
 	// the expiry of an incoming HTLC. This value expresses the time buffer
@@ -2434,6 +2440,10 @@ type ChannelEdgePolicy struct {
 	// MinHTLC is the smallest value HTLC this node will accept, expressed
 	// in millisatoshi.
 	MinHTLC lnwire.MilliSatoshi
+
+	// MaxHTLC is the largest value HTLC this node will accept, expressed
+	// in millisatoshi.
+	MaxHTLC lnwire.MilliSatoshi
 
 	// FeeBaseMSat is the base HTLC fee that will be charged for forwarding
 	// ANY HTLC, expressed in mSAT's.
@@ -3169,54 +3179,15 @@ func putChanEdgePolicy(edges, nodes *bbolt.Bucket, edge *ChannelEdgePolicy,
 	byteOrder.PutUint64(edgeKey[33:], edge.ChannelID)
 
 	var b bytes.Buffer
-
-	err := wire.WriteVarBytes(&b, 0, edge.SigBytes)
-	if err != nil {
-		return err
-	}
-
-	if err := binary.Write(&b, byteOrder, edge.ChannelID); err != nil {
-		return err
-	}
-
-	var scratch [8]byte
-	updateUnix := uint64(edge.LastUpdate.Unix())
-	byteOrder.PutUint64(scratch[:], updateUnix)
-	if _, err := b.Write(scratch[:]); err != nil {
-		return err
-	}
-
-	if err := binary.Write(&b, byteOrder, edge.Flags); err != nil {
-		return err
-	}
-	if err := binary.Write(&b, byteOrder, edge.TimeLockDelta); err != nil {
-		return err
-	}
-	if err := binary.Write(&b, byteOrder, uint64(edge.MinHTLC)); err != nil {
-		return err
-	}
-	if err := binary.Write(&b, byteOrder, uint64(edge.FeeBaseMSat)); err != nil {
-		return err
-	}
-	if err := binary.Write(&b, byteOrder, uint64(edge.FeeProportionalMillionths)); err != nil {
-		return err
-	}
-
-	if _, err := b.Write(to); err != nil {
-		return err
-	}
-
-	if len(edge.ExtraOpaqueData) > MaxAllowedExtraOpaqueBytes {
-		return ErrTooManyExtraOpaqueBytes(len(edge.ExtraOpaqueData))
-	}
-	if err := wire.WriteVarBytes(&b, 0, edge.ExtraOpaqueData); err != nil {
+	if err := serializeChanEdgePolicy(&b, edge, to); err != nil {
 		return err
 	}
 
 	// Before we write out the new edge, we'll create a new entry in the
 	// update index in order to keep it fresh.
+	updateUnix := uint64(edge.LastUpdate.Unix())
 	var indexKey [8 + 8]byte
-	copy(indexKey[:], scratch[:])
+	byteOrder.PutUint64(indexKey[:8], updateUnix)
 	byteOrder.PutUint64(indexKey[8:], edge.ChannelID)
 
 	updateIndex, err := edges.CreateBucketIfNotExists(edgeUpdateIndexBucket)
@@ -3235,11 +3206,15 @@ func putChanEdgePolicy(edges, nodes *bbolt.Bucket, edge *ChannelEdgePolicy,
 		// *prior* update time in order to delete it. To do this, we'll
 		// need to deserialize the existing policy within the database
 		// (now outdated by the new one), and delete its corresponding
-		// entry within the update index.
+		// entry within the update index. We'll ignore any
+		// ErrEdgePolicyOptionalFieldNotFound error, as we only need
+		// the channel ID and update time to delete the entry.
+		// TODO(halseth): get rid of these invalid policies in a
+		// migration.
 		oldEdgePolicy, err := deserializeChanEdgePolicy(
 			bytes.NewReader(edgeBytes), nodes,
 		)
-		if err != nil {
+		if err != nil && err != ErrEdgePolicyOptionalFieldNotFound {
 			return err
 		}
 
@@ -3297,7 +3272,18 @@ func fetchChanEdgePolicy(edges *bbolt.Bucket, chanID []byte,
 
 	edgeReader := bytes.NewReader(edgeBytes)
 
-	return deserializeChanEdgePolicy(edgeReader, nodes)
+	ep, err := deserializeChanEdgePolicy(edgeReader, nodes)
+	switch {
+	// If the db policy was missing an expected optional field, we return
+	// nil as if the policy was unknown.
+	case err == ErrEdgePolicyOptionalFieldNotFound:
+		return nil, nil
+
+	case err != nil:
+		return nil, err
+	}
+
+	return ep, nil
 }
 
 func fetchChanEdgePolicies(edgeIndex *bbolt.Bucket, edges *bbolt.Bucket,
@@ -3341,6 +3327,73 @@ func fetchChanEdgePolicies(edgeIndex *bbolt.Bucket, edges *bbolt.Bucket,
 	return edge1, edge2, nil
 }
 
+func serializeChanEdgePolicy(w io.Writer, edge *ChannelEdgePolicy,
+	to []byte) error {
+
+	err := wire.WriteVarBytes(w, 0, edge.SigBytes)
+	if err != nil {
+		return err
+	}
+
+	if err := binary.Write(w, byteOrder, edge.ChannelID); err != nil {
+		return err
+	}
+
+	var scratch [8]byte
+	updateUnix := uint64(edge.LastUpdate.Unix())
+	byteOrder.PutUint64(scratch[:], updateUnix)
+	if _, err := w.Write(scratch[:]); err != nil {
+		return err
+	}
+
+	if err := binary.Write(w, byteOrder, edge.MessageFlags); err != nil {
+		return err
+	}
+	if err := binary.Write(w, byteOrder, edge.ChannelFlags); err != nil {
+		return err
+	}
+	if err := binary.Write(w, byteOrder, edge.TimeLockDelta); err != nil {
+		return err
+	}
+	if err := binary.Write(w, byteOrder, uint64(edge.MinHTLC)); err != nil {
+		return err
+	}
+	if err := binary.Write(w, byteOrder, uint64(edge.FeeBaseMSat)); err != nil {
+		return err
+	}
+	if err := binary.Write(w, byteOrder, uint64(edge.FeeProportionalMillionths)); err != nil {
+		return err
+	}
+
+	if _, err := w.Write(to); err != nil {
+		return err
+	}
+
+	// If the max_htlc field is present, we write it. To be compatible with
+	// older versions that wasn't aware of this field, we write it as part
+	// of the opaque data.
+	// TODO(halseth): clean up when moving to TLV.
+	var opaqueBuf bytes.Buffer
+	if edge.MessageFlags.HasMaxHtlc() {
+		err := binary.Write(&opaqueBuf, byteOrder, uint64(edge.MaxHTLC))
+		if err != nil {
+			return err
+		}
+	}
+
+	if len(edge.ExtraOpaqueData) > MaxAllowedExtraOpaqueBytes {
+		return ErrTooManyExtraOpaqueBytes(len(edge.ExtraOpaqueData))
+	}
+	if _, err := opaqueBuf.Write(edge.ExtraOpaqueData); err != nil {
+		return err
+	}
+
+	if err := wire.WriteVarBytes(w, 0, opaqueBuf.Bytes()); err != nil {
+		return err
+	}
+	return nil
+}
+
 func deserializeChanEdgePolicy(r io.Reader,
 	nodes *bbolt.Bucket) (*ChannelEdgePolicy, error) {
 
@@ -3363,7 +3416,10 @@ func deserializeChanEdgePolicy(r io.Reader,
 	unix := int64(byteOrder.Uint64(scratch[:]))
 	edge.LastUpdate = time.Unix(unix, 0)
 
-	if err := binary.Read(r, byteOrder, &edge.Flags); err != nil {
+	if err := binary.Read(r, byteOrder, &edge.MessageFlags); err != nil {
+		return nil, err
+	}
+	if err := binary.Read(r, byteOrder, &edge.ChannelFlags); err != nil {
 		return nil, err
 	}
 	if err := binary.Read(r, byteOrder, &edge.TimeLockDelta); err != nil {
@@ -3396,6 +3452,7 @@ func deserializeChanEdgePolicy(r io.Reader,
 		return nil, fmt.Errorf("unable to fetch node: %x, %v",
 			pub[:], err)
 	}
+	edge.Node = &node
 
 	// We'll try and see if there are any opaque bytes left, if not, then
 	// we'll ignore the EOF error and return the edge as is.
@@ -3409,6 +3466,25 @@ func deserializeChanEdgePolicy(r io.Reader,
 		return nil, err
 	}
 
-	edge.Node = &node
+	// See if optional fields are present.
+	if edge.MessageFlags.HasMaxHtlc() {
+		// The max_htlc field should be at the beginning of the opaque
+		// bytes.
+		opq := edge.ExtraOpaqueData
+
+		// If the max_htlc field is not present, it might be old data
+		// stored before this field was validated. We'll return the
+		// edge along with an error.
+		if len(opq) < 8 {
+			return edge, ErrEdgePolicyOptionalFieldNotFound
+		}
+
+		maxHtlc := byteOrder.Uint64(opq[:8])
+		edge.MaxHTLC = lnwire.MilliSatoshi(maxHtlc)
+
+		// Exclude the parsed field from the rest of the opaque data.
+		edge.ExtraOpaqueData = opq[8:]
+	}
+
 	return edge, nil
 }

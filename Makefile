@@ -4,11 +4,13 @@ ESCPKG := github.com\/wakiyamap\/lnd
 BTCD_PKG := github.com/btcsuite/btcd
 GOVERALLS_PKG := github.com/mattn/goveralls
 LINT_PKG := gopkg.in/alecthomas/gometalinter.v2
+GOACC_PKG := github.com/ory/go-acc
 
 GO_BIN := ${GOPATH}/bin
 BTCD_BIN := $(GO_BIN)/btcd
 GOVERALLS_BIN := $(GO_BIN)/goveralls
 LINT_BIN := $(GO_BIN)/gometalinter.v2
+GOACC_BIN := $(GO_BIN)/go-acc
 
 BTCD_DIR :=${GOPATH}/src/$(BTCD_PKG)
 
@@ -21,10 +23,13 @@ BTCD_COMMIT := $(shell cat go.mod | \
 		awk -F " " '{ print $$2 }' | \
 		awk -F "/" '{ print $$1 }')
 
+GOACC_COMMIT := ddc355013f90fea78d83d3a6c71f1d37ac07ecd5
+
 GOBUILD := GO111MODULE=on go build -v
 GOINSTALL := GO111MODULE=on go install -v
 GOTEST := GO111MODULE=on go test -v
 
+GOFILES_NOVENDOR = $(shell find . -type f -name '*.go' -not -path "./vendor/*")
 GOLIST := go list $(PKG)/... | grep -v '/vendor/'
 GOLISTCOVER := $(shell go list -f '{{.ImportPath}}' ./... | sed -e 's/^$(ESCPKG)/./')
 GOLISTLINT := $(shell go list -f '{{.Dir}}' ./... | grep -v 'lnrpc')
@@ -37,23 +42,6 @@ XARGS := xargs -L 1
 include make/testing_flags.mk
 
 DEV_TAGS := $(if ${tags},$(DEV_TAGS) ${tags},$(DEV_TAGS))
-
-COVER = for dir in $(GOLISTCOVER); do \
-		$(GOTEST) -tags="$(DEV_TAGS) $(LOG_TAGS)" \
-			-covermode=count \
-			-coverprofile=$$dir/profile.tmp $$dir; \
-		\
-		if [ $$? != 0 ] ; \
-		then \
-			exit 1; \
-		fi ; \
-		\
-		if [ -f $$dir/profile.tmp ]; then \
-			cat $$dir/profile.tmp | \
-				tail -n +2 >> profile.cov; \
-			$(RM) $$dir/profile.tmp; \
-		fi \
-	done
 
 LINT = $(LINT_BIN) \
 	--disable-all \
@@ -86,6 +74,11 @@ $(GOVERALLS_BIN):
 $(LINT_BIN):
 	@$(call print, "Fetching gometalinter.v2")
 	GO111MODULE=off go get -u $(LINT_PKG)
+
+$(GOACC_BIN):
+	@$(call print, "Fetching go-acc")
+	go get -u -v $(GOACC_PKG)@$(GOACC_COMMIT)
+	$(GOINSTALL) $(GOACC_PKG)
 
 btcd:
 	@$(call print, "Installing btcd.")
@@ -129,10 +122,9 @@ unit: btcd
 	@$(call print, "Running unit tests.")
 	$(UNIT)
 
-unit-cover:
+unit-cover: $(GOACC_BIN)
 	@$(call print, "Running unit coverage tests.")
-	echo "mode: count" > profile.cov
-	$(COVER)
+	$(GOACC_BIN) $$(go list ./... | grep -v lnrpc) -- -test.tags="$(DEV_TAGS) $(LOG_TAGS)"
 
 unit-race:
 	@$(call print, "Running unit race tests.")
@@ -140,17 +132,20 @@ unit-race:
 
 goveralls: $(GOVERALLS_BIN)
 	@$(call print, "Sending coverage report.")
-	$(GOVERALLS_BIN) -coverprofile=profile.cov -service=travis-ci
+	$(GOVERALLS_BIN) -coverprofile=coverage.txt -service=travis-ci
 
-travis-race: btcd unit-race
 
-travis-cover: btcd lint unit-cover goveralls
+travis-race: lint btcd unit-race
+
+travis-cover: lint btcd unit-cover goveralls
+
+travis-itest: lint itest
 
 # =============
 # FLAKE HUNTING
 # =============
 
-flakehunter: build
+flakehunter: build-itest
 	@$(call print, "Flake hunting integration tests.")
 	while [ $$? -eq 0 ]; do $(ITEST); done
 
@@ -165,7 +160,7 @@ flake-unit:
 
 fmt:
 	@$(call print, "Formatting source.")
-	$(GOLIST) | $(XARGS) go fmt -x
+	gofmt -l -w -s $(GOFILES_NOVENDOR)
 
 lint: $(LINT_BIN)
 	@$(call print, "Linting source.")
@@ -205,6 +200,7 @@ clean:
 	goveralls \
 	travis-race \
 	travis-cover \
+	travis-itest \
 	flakehunter \
 	flake-unit \
 	fmt \

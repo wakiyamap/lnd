@@ -3,9 +3,10 @@ package main
 import (
 	"sync"
 
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/contractcourt"
+	"github.com/wakiyamap/lnd/invoices"
+	"github.com/wakiyamap/lnd/lntypes"
 	"github.com/wakiyamap/lnd/lnwallet"
 )
 
@@ -23,7 +24,7 @@ type preimageSubscriber struct {
 type preimageBeacon struct {
 	sync.RWMutex
 
-	invoices *invoiceRegistry
+	invoices *invoices.InvoiceRegistry
 
 	wCache *channeldb.WitnessCache
 
@@ -71,7 +72,7 @@ func (p *preimageBeacon) LookupPreimage(payHash []byte) ([]byte, bool) {
 
 	// First, we'll check the invoice registry to see if we already know of
 	// the preimage as it's on that we created ourselves.
-	var invoiceKey chainhash.Hash
+	var invoiceKey lntypes.Hash
 	copy(invoiceKey[:], payHash)
 	invoice, _, err := p.invoices.LookupInvoice(invoiceKey)
 	switch {

@@ -24,12 +24,14 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/contractcourt"
+	"github.com/wakiyamap/lnd/input"
 	"github.com/wakiyamap/lnd/keychain"
 	"github.com/wakiyamap/lnd/lnpeer"
+	"github.com/wakiyamap/lnd/lntypes"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/wakiyamap/lnd/shachain"
-	"github.com/wakiyamap/lnd/ticker"	
+	"github.com/wakiyamap/lnd/ticker"
 )
 
 var (
@@ -168,7 +170,8 @@ func createTestChannel(alicePrivKey, bobPrivKey []byte,
 			channelCapacity),
 		ChanReserve:      aliceReserve,
 		MinHTLC:          0,
-		MaxAcceptedHtlcs: lnwallet.MaxHTLCNumber / 2,
+		MaxAcceptedHtlcs: input.MaxHTLCNumber / 2,
+		CsvDelay:         uint16(csvTimeoutAlice),
 	}
 
 	bobConstraints := &channeldb.ChannelConstraints{
@@ -177,7 +180,8 @@ func createTestChannel(alicePrivKey, bobPrivKey []byte,
 			channelCapacity),
 		ChanReserve:      bobReserve,
 		MinHTLC:          0,
-		MaxAcceptedHtlcs: lnwallet.MaxHTLCNumber / 2,
+		MaxAcceptedHtlcs: input.MaxHTLCNumber / 2,
+		CsvDelay:         uint16(csvTimeoutBob),
 	}
 
 	var hash [sha256.Size]byte
@@ -195,7 +199,6 @@ func createTestChannel(alicePrivKey, bobPrivKey []byte,
 
 	aliceCfg := channeldb.ChannelConfig{
 		ChannelConstraints: *aliceConstraints,
-		CsvDelay:           uint16(csvTimeoutAlice),
 		MultiSigKey: keychain.KeyDescriptor{
 			PubKey: aliceKeyPub,
 		},
@@ -214,7 +217,6 @@ func createTestChannel(alicePrivKey, bobPrivKey []byte,
 	}
 	bobCfg := channeldb.ChannelConfig{
 		ChannelConstraints: *bobConstraints,
-		CsvDelay:           uint16(csvTimeoutBob),
 		MultiSigKey: keychain.KeyDescriptor{
 			PubKey: bobKeyPub,
 		},
@@ -241,7 +243,7 @@ func createTestChannel(alicePrivKey, bobPrivKey []byte,
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	bobCommitPoint := lnwallet.ComputeCommitmentPoint(bobFirstRevoke[:])
+	bobCommitPoint := input.ComputeCommitmentPoint(bobFirstRevoke[:])
 
 	aliceRoot, err := chainhash.NewHash(aliceKeyPriv.Serialize())
 	if err != nil {
@@ -252,7 +254,7 @@ func createTestChannel(alicePrivKey, bobPrivKey []byte,
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	aliceCommitPoint := lnwallet.ComputeCommitmentPoint(aliceFirstRevoke[:])
+	aliceCommitPoint := input.ComputeCommitmentPoint(aliceFirstRevoke[:])
 
 	aliceCommitTx, bobCommitTx, err := lnwallet.CreateCommitmentTxns(aliceAmount,
 		bobAmount, &aliceCfg, &bobCfg, aliceCommitPoint, bobCommitPoint,
@@ -650,11 +652,11 @@ func generateHops(payAmt lnwire.MilliSatoshi, startingHeight uint32,
 }
 
 type paymentResponse struct {
-	rhash chainhash.Hash
+	rhash lntypes.Hash
 	err   chan error
 }
 
-func (r *paymentResponse) Wait(d time.Duration) (chainhash.Hash, error) {
+func (r *paymentResponse) Wait(d time.Duration) (lntypes.Hash, error) {
 	select {
 	case err := <-r.err:
 		close(r.err)
@@ -679,7 +681,7 @@ func (n *threeHopNetwork) makePayment(sendingPeer, receivingPeer lnpeer.Peer,
 
 	paymentErr := make(chan error, 1)
 
-	var rhash chainhash.Hash
+	var rhash lntypes.Hash
 
 	sender := sendingPeer.(*mockServer)
 	receiver := receivingPeer.(*mockServer)

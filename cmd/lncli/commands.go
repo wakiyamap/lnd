@@ -19,8 +19,8 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/golang/protobuf/proto"
-	"github.com/wakiyamap/lnd/lnrpc"
 	"github.com/urfave/cli"
+	"github.com/wakiyamap/lnd/lnrpc"
 	"golang.org/x/crypto/ssh/terminal"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc/codes"
@@ -161,7 +161,13 @@ var sendCoinsCommand = cli.Command{
 			Name:  "addr",
 			Usage: "the BASE58 encoded bitcoin address to send coins to on-chain",
 		},
-		// TODO(roasbeef): switch to BTC on command line? int may not be sufficient
+		cli.BoolFlag{
+			Name: "sweepall",
+			Usage: "if set, then the amount field will be ignored, " +
+				"and all the wallet will attempt to sweep all " +
+				"outputs within the wallet to the target " +
+				"address",
+		},
 		cli.Int64Flag{
 			Name:  "amt",
 			Usage: "the number of bitcoin denominated in satoshis to send",
@@ -215,12 +221,16 @@ func sendCoins(ctx *cli.Context) error {
 		amt = ctx.Int64("amt")
 	case args.Present():
 		amt, err = strconv.ParseInt(args.First(), 10, 64)
-	default:
+	case !ctx.Bool("sweepall"):
 		return fmt.Errorf("Amount argument missing")
 	}
-
 	if err != nil {
 		return fmt.Errorf("unable to decode amount: %v", err)
+	}
+
+	if amt != 0 && ctx.Bool("sweepall") {
+		return fmt.Errorf("amount cannot be set if attempting to " +
+			"sweep all coins out of the wallet")
 	}
 
 	ctxb := context.Background()
@@ -232,6 +242,7 @@ func sendCoins(ctx *cli.Context) error {
 		Amount:     amt,
 		TargetConf: int32(ctx.Int64("conf_target")),
 		SatPerByte: ctx.Int64("sat_per_byte"),
+		SendAll:    ctx.Bool("sweepall"),
 	}
 	txid, err := client.SendCoins(ctxb, req)
 	if err != nil {
@@ -329,11 +340,26 @@ func listUnspent(ctx *cli.Context) error {
 		MinConfs: int32(minConfirms),
 		MaxConfs: int32(maxConfirms),
 	}
-	jsonResponse, err := client.ListUnspent(ctxb, req)
+	resp, err := client.ListUnspent(ctxb, req)
 	if err != nil {
 		return err
 	}
-	printRespJSON(jsonResponse)
+
+	// Parse the response into the final json object that will be printed
+	// to stdout. At the moment, this filters out the raw txid bytes from
+	// each utxo's outpoint and only prints the txid string.
+	var listUnspentResp = struct {
+		Utxos []*Utxo `json:"utxos"`
+	}{
+		Utxos: make([]*Utxo, 0, len(resp.Utxos)),
+	}
+	for _, protoUtxo := range resp.Utxos {
+		utxo := NewUtxoFromProto(protoUtxo)
+		listUnspentResp.Utxos = append(listUnspentResp.Utxos, utxo)
+	}
+
+	printJSON(listUnspentResp)
+
 	return nil
 }
 
@@ -1669,6 +1695,11 @@ var getInfoCommand = cli.Command{
 	Action: actionDecorator(getInfo),
 }
 
+type chain struct {
+	Chain   string `json:"chain"`
+	Network string `json:"network"`
+}
+
 func getInfo(ctx *cli.Context) error {
 	ctxb := context.Background()
 	client, cleanUp := getClient(ctx)
@@ -1678,6 +1709,14 @@ func getInfo(ctx *cli.Context) error {
 	resp, err := client.GetInfo(ctxb, req)
 	if err != nil {
 		return err
+	}
+
+	chains := make([]chain, len(resp.Chains))
+	for i, c := range resp.Chains {
+		chains[i] = chain{
+			Chain:   c.Chain,
+			Network: c.Network,
+		}
 	}
 
 	// We print a struct that mimics the proto definition of GetInfoResponse
@@ -1695,7 +1734,7 @@ func getInfo(ctx *cli.Context) error {
 		BestHeaderTimestamp int64    `json:"best_header_timestamp"`
 		SyncedToChain       bool     `json:"synced_to_chain"`
 		Testnet             bool     `json:"testnet"`
-		Chains              []string `json:"chains"`
+		Chains              []chain  `json:"chains"`
 		Uris                []string `json:"uris"`
 	}{
 		Version:             resp.Version,
@@ -1710,7 +1749,7 @@ func getInfo(ctx *cli.Context) error {
 		BestHeaderTimestamp: resp.BestHeaderTimestamp,
 		SyncedToChain:       resp.SyncedToChain,
 		Testnet:             resp.Testnet,
-		Chains:              resp.Chains,
+		Chains:              chains,
 		Uris:                resp.Uris,
 	})
 	return nil

@@ -4,9 +4,10 @@ package autopilotrpc
 
 import (
 	"context"
-	"os"
+	"encoding/hex"
 	"sync/atomic"
 
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/wakiyamap/lnd/autopilot"
 	"github.com/wakiyamap/lnd/lnrpc"
 	"google.golang.org/grpc"
@@ -35,6 +36,10 @@ var (
 			Entity: "offchain",
 			Action: "write",
 		}},
+		"/autopilotrpc.Autopilot/QueryScores": {{
+			Entity: "info",
+			Action: "read",
+		}},
 	}
 )
 
@@ -53,16 +58,6 @@ type Server struct {
 // A compile time check to ensure that Server fully implements the
 // AutopilotServer gRPC service.
 var _ AutopilotServer = (*Server)(nil)
-
-// fileExists reports whether the named file or directory exists.
-func fileExists(name string) bool {
-	if _, err := os.Stat(name); err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
-	}
-	return true
-}
 
 // New returns a new instance of the autopilotrpc Autopilot sub-server. We also
 // return the set of permissions for the macaroons that we may create within
@@ -153,4 +148,61 @@ func (s *Server) ModifyStatus(ctx context.Context,
 		err = s.manager.StopAgent()
 	}
 	return &ModifyStatusResponse{}, err
+}
+
+// QueryScores queries all available autopilot heuristics, in addition to any
+// active combination of these heruristics, for the scores they would give to
+// the given nodes.
+//
+// NOTE: Part of the AutopilotServer interface.
+func (s *Server) QueryScores(ctx context.Context, in *QueryScoresRequest) (
+	*QueryScoresResponse, error) {
+
+	var nodes []autopilot.NodeID
+	for _, pubStr := range in.Pubkeys {
+		pubHex, err := hex.DecodeString(pubStr)
+		if err != nil {
+			return nil, err
+		}
+		pubKey, err := btcec.ParsePubKey(pubHex, btcec.S256())
+		if err != nil {
+			return nil, err
+		}
+		nID := autopilot.NewNodeID(pubKey)
+		nodes = append(nodes, nID)
+	}
+
+	// Query the heuristics.
+	heuristicScores, err := s.manager.QueryHeuristics(nodes)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &QueryScoresResponse{}
+	for heuristic, scores := range heuristicScores {
+		result := &QueryScoresResponse_HeuristicResult{
+			Heuristic: heuristic,
+			Scores:    make(map[string]float64),
+		}
+
+		for pub, score := range scores {
+			pubkeyHex := hex.EncodeToString(pub[:])
+			result.Scores[pubkeyHex] = score
+		}
+
+		// Since a node not being part of the internally returned
+		// scores imply a zero score, we add these before we return the
+		// RPC results.
+		for _, node := range nodes {
+			if _, ok := scores[node]; ok {
+				continue
+			}
+			pubkeyHex := hex.EncodeToString(node[:])
+			result.Scores[pubkeyHex] = 0.0
+		}
+
+		resp.Results = append(resp.Results, result)
+	}
+
+	return resp, nil
 }

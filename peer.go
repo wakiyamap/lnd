@@ -23,7 +23,6 @@ import (
 	"github.com/wakiyamap/lnd/contractcourt"
 	"github.com/wakiyamap/lnd/htlcswitch"
 	"github.com/wakiyamap/lnd/lnpeer"
-	"github.com/wakiyamap/lnd/lnrpc"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/wakiyamap/lnd/ticker"
@@ -83,6 +82,18 @@ type closeMsg struct {
 // to gain a snapshot of the peer's currently active channels.
 type chanSnapshotReq struct {
 	resp chan []*channeldb.ChannelSnapshot
+}
+
+// pendingUpdate describes the pending state of a closing channel.
+type pendingUpdate struct {
+	Txid        []byte
+	OutputIndex uint32
+}
+
+// channelCloseUpdate contains the outcome of the close channel operation.
+type channelCloseUpdate struct {
+	ClosingTxid []byte
+	Success     bool
 }
 
 // peer is an active peer on the Lightning Network. This struct is responsible
@@ -187,7 +198,7 @@ type peer struct {
 	// messages to write out directly on the socket. By re-using this
 	// buffer, we avoid needing to allocate more memory each time a new
 	// message is to be sent to a peer.
-	writeBuf [lnwire.MaxMessagePayload]byte
+	writeBuf *lnpeer.WriteBuffer
 
 	queueQuit chan struct{}
 	quit      chan struct{}
@@ -227,6 +238,8 @@ func newPeer(conn net.Conn, connReq *connmgr.ConnReq, server *server,
 		linkFailures:       make(chan linkFailureReport),
 		chanCloseMsgs:      make(chan *closeMsg),
 		failedChannels:     make(map[lnwire.ChannelID]struct{}),
+
+		writeBuf: server.writeBufferPool.Take(),
 
 		queueQuit: make(chan struct{}),
 		quit:      make(chan struct{}),
@@ -398,7 +411,7 @@ func (p *peer) loadActiveChannels(chans []*channeldb.OpenChannel) error {
 
 		// Skip adding any permanently irreconcilable channels to the
 		// htlcswitch.
-		if dbChan.ChanStatus() != channeldb.Default {
+		if dbChan.ChanStatus() != channeldb.ChanStatusDefault {
 			peerLog.Warnf("ChannelPoint(%v) has status %v, won't "+
 				"start.", chanPoint, dbChan.ChanStatus())
 			continue
@@ -602,6 +615,11 @@ func (p *peer) WaitForDisconnect(ready chan struct{}) {
 	}
 
 	p.wg.Wait()
+
+	// Now that we are certain all active goroutines which could have been
+	// modifying the write buffer have exited, return the buffer to the pool
+	// to be reused.
+	p.server.writeBufferPool.Return(p.writeBuf)
 }
 
 // Disconnect terminates the connection with the remote peer. Additionally, a
@@ -947,9 +965,9 @@ func (p *peer) readHandler() {
 		p.Disconnect(err)
 	})
 
-	// Initialize our negotiated gossip sync method before reading
-	// messages off the wire. When using gossip queries, this ensures
-	// a gossip syncer is active by the time query messages arrive.
+	// Initialize our negotiated gossip sync method before reading messages
+	// off the wire. When using gossip queries, this ensures a gossip
+	// syncer is active by the time query messages arrive.
 	//
 	// TODO(conner): have peer store gossip syncer directly and bypass
 	// gossiper?
@@ -982,6 +1000,13 @@ out:
 			// simply continue parsing the remainder of their
 			// messages.
 			case *lnwire.ErrUnknownAddrType:
+				idleTimer.Reset(idleTimeout)
+				continue
+
+			// If the NodeAnnouncement has an invalid alias, then
+			// we'll log that error above and continue so we can
+			// continue to read messges from the peer.
+			case *lnwire.ErrInvalidNodeAlias:
 				idleTimer.Reset(idleTimeout)
 				continue
 
@@ -1217,10 +1242,10 @@ func messageSummary(msg lnwire.Message) string {
 			msg.ChainHash, msg.ShortChannelID.ToUint64())
 
 	case *lnwire.ChannelUpdate:
-		return fmt.Sprintf("chain_hash=%v, short_chan_id=%v, flag=%v, "+
-			"update_time=%v", msg.ChainHash,
-			msg.ShortChannelID.ToUint64(), msg.Flags,
-			time.Unix(int64(msg.Timestamp), 0))
+		return fmt.Sprintf("chain_hash=%v, short_chan_id=%v, "+
+			"mflags=%v, cflags=%v, update_time=%v", msg.ChainHash,
+			msg.ShortChannelID.ToUint64(), msg.MessageFlags,
+			msg.ChannelFlags, time.Unix(int64(msg.Timestamp), 0))
 
 	case *lnwire.NodeAnnouncement:
 		return fmt.Sprintf("node=%x, update_time=%v",
@@ -1349,13 +1374,25 @@ func (p *peer) writeMessage(msg lnwire.Message) error {
 
 	// With the temp buffer created and sliced properly (length zero, full
 	// capacity), we'll now encode the message directly into this buffer.
-	n, err := lnwire.WriteMessage(b, msg, 0)
-	atomic.AddUint64(&p.bytesSent, uint64(n))
+	_, err := lnwire.WriteMessage(b, msg, 0)
+	if err != nil {
+		return err
+	}
 
-	p.conn.SetWriteDeadline(time.Now().Add(writeMessageTimeout))
+	// Compute and set the write deadline we will impose on the remote peer.
+	writeDeadline := time.Now().Add(writeMessageTimeout)
+	err = p.conn.SetWriteDeadline(writeDeadline)
+	if err != nil {
+		return err
+	}
 
 	// Finally, write the message itself in a single swoop.
-	_, err = p.conn.Write(b.Bytes())
+	n, err := p.conn.Write(b.Bytes())
+
+	// Regardless of the error returned, record how many bytes were written
+	// to the wire.
+	atomic.AddUint64(&p.bytesSent, uint64(n))
+
 	return err
 }
 
@@ -2037,12 +2074,8 @@ func (p *peer) finalizeChanClosure(chanCloser *channelCloser) {
 	// If this is a locally requested shutdown, update the caller with a
 	// new event detailing the current pending state of this request.
 	if closeReq != nil {
-		closeReq.Updates <- &lnrpc.CloseStatusUpdate{
-			Update: &lnrpc.CloseStatusUpdate_ClosePending{
-				ClosePending: &lnrpc.PendingUpdate{
-					Txid: closingTxid[:],
-				},
-			},
+		closeReq.Updates <- &pendingUpdate{
+			Txid: closingTxid[:],
 		}
 	}
 
@@ -2052,13 +2085,9 @@ func (p *peer) finalizeChanClosure(chanCloser *channelCloser) {
 			// Respond to the local subsystem which requested the
 			// channel closure.
 			if closeReq != nil {
-				closeReq.Updates <- &lnrpc.CloseStatusUpdate{
-					Update: &lnrpc.CloseStatusUpdate_ChanClose{
-						ChanClose: &lnrpc.ChannelCloseUpdate{
-							ClosingTxid: closingTxid[:],
-							Success:     true,
-						},
-					},
+				closeReq.Updates <- &channelCloseUpdate{
+					ClosingTxid: closingTxid[:],
+					Success:     true,
 				}
 			}
 		})
@@ -2124,23 +2153,33 @@ func (p *peer) WipeChannel(chanPoint *wire.OutPoint) error {
 // handleInitMsg handles the incoming init message which contains global and
 // local features vectors. If feature vectors are incompatible then disconnect.
 func (p *peer) handleInitMsg(msg *lnwire.Init) error {
-	p.remoteLocalFeatures = lnwire.NewFeatureVector(msg.LocalFeatures,
-		lnwire.LocalFeatures)
-	p.remoteGlobalFeatures = lnwire.NewFeatureVector(msg.GlobalFeatures,
-		lnwire.GlobalFeatures)
+	p.remoteLocalFeatures = lnwire.NewFeatureVector(
+		msg.LocalFeatures, lnwire.LocalFeatures,
+	)
+	p.remoteGlobalFeatures = lnwire.NewFeatureVector(
+		msg.GlobalFeatures, lnwire.GlobalFeatures,
+	)
 
+	// Now that we have their features loaded, we'll ensure that they
+	// didn't set any required bits that we don't know of.
 	unknownLocalFeatures := p.remoteLocalFeatures.UnknownRequiredFeatures()
 	if len(unknownLocalFeatures) > 0 {
 		err := fmt.Errorf("Peer set unknown local feature bits: %v",
 			unknownLocalFeatures)
 		return err
 	}
-
 	unknownGlobalFeatures := p.remoteGlobalFeatures.UnknownRequiredFeatures()
 	if len(unknownGlobalFeatures) > 0 {
 		err := fmt.Errorf("Peer set unknown global feature bits: %v",
 			unknownGlobalFeatures)
 		return err
+	}
+
+	// Now that we know we understand their requirements, we'll check to
+	// see if they don't support anything that we deem to be mandatory.
+	switch {
+	case !p.remoteLocalFeatures.HasFeature(lnwire.DataLossProtectRequired):
+		return fmt.Errorf("data loss protection required")
 	}
 
 	return nil

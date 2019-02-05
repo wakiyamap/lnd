@@ -4,7 +4,7 @@ package walletrpc
 
 import (
 	"bytes"
-	fmt "fmt"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -12,10 +12,10 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	"github.com/wakiyamap/lnd/keychain"
 	"github.com/wakiyamap/lnd/lnrpc"
-	signrpc "github.com/wakiyamap/lnd/lnrpc/signrpc"
+	"github.com/wakiyamap/lnd/lnrpc/signrpc"
 	"github.com/wakiyamap/lnd/lnwallet"
-	context "golang.org/x/net/context"
-	grpc "google.golang.org/grpc"
+	"golang.org/x/net/context"
+	"google.golang.org/grpc"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 )
 
@@ -93,16 +93,6 @@ type WalletKit struct {
 // WalletKitServer gRPC service.
 var _ WalletKitServer = (*WalletKit)(nil)
 
-// fileExists reports whether the named file or directory exists.
-func fileExists(name string) bool {
-	if _, err := os.Stat(name); err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
-	}
-	return true
-}
-
 // New creates a new instance of the WalletKit sub-RPC server.
 func New(cfg *Config) (*WalletKit, lnrpc.MacaroonPerms, error) {
 	// If the path of the wallet kit macaroon wasn't specified, then we'll
@@ -116,8 +106,8 @@ func New(cfg *Config) (*WalletKit, lnrpc.MacaroonPerms, error) {
 	// Now that we know the full path of the wallet kit macaroon, we can
 	// check to see if we need to create it or not.
 	macFilePath := cfg.WalletKitMacPath
-	if !fileExists(macFilePath) && cfg.MacService != nil {
-		log.Infof("Baking macaroons for WaleltKit RPC Server at: %v",
+	if !lnrpc.FileExists(macFilePath) && cfg.MacService != nil {
+		log.Infof("Baking macaroons for WalletKit RPC Server at: %v",
 			macFilePath)
 
 		// At this point, we know that the wallet kit macaroon doesn't

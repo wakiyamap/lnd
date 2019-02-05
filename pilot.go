@@ -14,6 +14,60 @@ import (
 	"github.com/wakiyamap/lnd/tor"
 )
 
+// validateAtplConfig is a helper method that makes sure the passed
+// configuration is sane. Currently it checks that the heuristic configuration
+// makes sense. In case the config is valid, it will return a list of
+// WeightedHeuristics that can be combined for use with the autopilot agent.
+func validateAtplCfg(cfg *autoPilotConfig) ([]*autopilot.WeightedHeuristic,
+	error) {
+
+	var (
+		heuristicsStr string
+		sum           float64
+		heuristics    []*autopilot.WeightedHeuristic
+	)
+
+	// Create a help text that we can return in case the config is not
+	// correct.
+	for _, a := range autopilot.AvailableHeuristics {
+		heuristicsStr += fmt.Sprintf(" '%v' ", a.Name())
+	}
+	availStr := fmt.Sprintf("Avaiblable heuristcs are: [%v]", heuristicsStr)
+
+	// We'll go through the config and make sure all the heuristics exists,
+	// and that the sum of their weights is 1.0.
+	for name, weight := range cfg.Heuristic {
+		a, ok := autopilot.AvailableHeuristics[name]
+		if !ok {
+			// No heuristic matching this config option was found.
+			return nil, fmt.Errorf("Heuristic %v not available. %v",
+				name, availStr)
+		}
+
+		// If this heuristic was among the registered ones, we add it
+		// to the list we'll give to the agent, and keep track of the
+		// sum of weights.
+		heuristics = append(
+			heuristics,
+			&autopilot.WeightedHeuristic{
+				Weight:              weight,
+				AttachmentHeuristic: a,
+			},
+		)
+		sum += weight
+	}
+
+	// Check found heuristics. We must have at least one to operate.
+	if len(heuristics) == 0 {
+		return nil, fmt.Errorf("No active heuristics. %v", availStr)
+	}
+
+	if sum != 1.0 {
+		return nil, fmt.Errorf("Heuristic weights must sum to 1.0")
+	}
+	return heuristics, nil
+}
+
 // chanController is an implementation of the autopilot.ChannelController
 // interface that's backed by a running lnd instance.
 type chanController struct {
@@ -83,30 +137,35 @@ var _ autopilot.ChannelController = (*chanController)(nil)
 // autopilot.Agent instance based on the passed configuration struct. The agent
 // and all interfaces needed to drive it won't be launched before the Manager's
 // StartAgent method is called.
-func initAutoPilot(svr *server, cfg *autoPilotConfig) *autopilot.ManagerCfg {
+func initAutoPilot(svr *server, cfg *autoPilotConfig) (*autopilot.ManagerCfg, error) {
 	atplLog.Infof("Instantiating autopilot with cfg: %v", spew.Sdump(cfg))
 
 	// Set up the constraints the autopilot heuristics must adhere to.
-	atplConstraints := &autopilot.HeuristicConstraints{
-		MinChanSize:     btcutil.Amount(cfg.MinChannelSize),
-		MaxChanSize:     btcutil.Amount(cfg.MaxChannelSize),
-		ChanLimit:       uint16(cfg.MaxChannels),
-		Allocation:      cfg.Allocation,
-		MaxPendingOpens: 10,
+	atplConstraints := autopilot.NewConstraints(
+		btcutil.Amount(cfg.MinChannelSize),
+		btcutil.Amount(cfg.MaxChannelSize),
+		uint16(cfg.MaxChannels),
+		10,
+		cfg.Allocation,
+	)
+	heuristics, err := validateAtplCfg(cfg)
+	if err != nil {
+		return nil, err
 	}
 
-	// First, we'll create the preferential attachment heuristic,
-	// initialized with the passed auto pilot configuration parameters.
-	prefAttachment := autopilot.NewConstrainedPrefAttachment(
-		atplConstraints,
+	weightedAttachment, err := autopilot.NewWeightedCombAttachment(
+		heuristics...,
 	)
+	if err != nil {
+		return nil, err
+	}
 
 	// With the heuristic itself created, we can now populate the remainder
 	// of the items that the autopilot agent needs to perform its duties.
 	self := svr.identityPriv.PubKey()
 	pilotCfg := autopilot.Config{
 		Self:      self,
-		Heuristic: prefAttachment,
+		Heuristic: weightedAttachment,
 		ChanController: &chanController{
 			server:   svr,
 			private:  cfg.Private,
@@ -205,5 +264,5 @@ func initAutoPilot(svr *server, cfg *autoPilotConfig) *autopilot.ManagerCfg {
 		},
 		SubscribeTransactions: svr.cc.wallet.SubscribeTransactions,
 		SubscribeTopology:     svr.chanRouter.SubscribeTopology,
-	}
+	}, nil
 }

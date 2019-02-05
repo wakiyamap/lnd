@@ -10,6 +10,8 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/input"
+	"github.com/wakiyamap/lnd/lntypes"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
 )
@@ -173,6 +175,9 @@ func createTestChannelArbitrator(log ArbitratorLog) (*ChannelArbitrator,
 		IncubateOutputs: func(wire.OutPoint, *lnwallet.CommitOutputResolution,
 			*lnwallet.OutgoingHtlcResolution,
 			*lnwallet.IncomingHtlcResolution, uint32) error {
+			return nil
+		},
+		SettleInvoice: func(lntypes.Hash, lnwire.MilliSatoshi) error {
 			return nil
 		},
 	}
@@ -539,7 +544,7 @@ func TestChannelArbitratorLocalForceClosePendingHtlc(t *testing.T) {
 	// our commitment transaction got confirmed.
 	outgoingRes := lnwallet.OutgoingHtlcResolution{
 		Expiry: 10,
-		SweepSignDesc: lnwallet.SignDescriptor{
+		SweepSignDesc: input.SignDescriptor{
 			Output: &wire.TxOut{},
 		},
 		SignedTimeoutTx: &wire.MsgTx{
@@ -607,10 +612,7 @@ func TestChannelArbitratorLocalForceClosePendingHtlc(t *testing.T) {
 	notifier.spendChan <- &chainntnfs.SpendDetail{}
 
 	// At this point channel should be marked as resolved.
-
-	// It should transition StateWaitingFullResolution ->
-	// StateFullyResolved, but this isn't happening.
-	// assertStateTransitions(t, arbLog.newStates, StateFullyResolved)
+	assertStateTransitions(t, arbLog.newStates, StateFullyResolved)
 
 	select {
 	case <-resolved:

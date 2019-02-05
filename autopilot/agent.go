@@ -57,7 +57,7 @@ type Config struct {
 
 	// Constraints is the set of constraints the autopilot must adhere to
 	// when opening channels.
-	Constraints *HeuristicConstraints
+	Constraints AgentConstraints
 
 	// TODO(roasbeef): add additional signals from fee rates and revenue of
 	// currently opened channels
@@ -113,7 +113,8 @@ type Agent struct {
 	cfg Config
 
 	// chanState tracks the current set of open channels.
-	chanState channelState
+	chanState    channelState
+	chanStateMtx sync.Mutex
 
 	// stateUpdates is a channel that any external state updates that may
 	// affect the heuristics of the agent will be sent over.
@@ -410,7 +411,9 @@ func (a *Agent) controller() {
 					spew.Sdump(update.newChan))
 
 				newChan := update.newChan
+				a.chanStateMtx.Lock()
 				a.chanState[newChan.ChanID] = newChan
+				a.chanStateMtx.Unlock()
 
 				a.pendingMtx.Lock()
 				delete(a.pendingOpens, newChan.Node)
@@ -424,9 +427,11 @@ func (a *Agent) controller() {
 					"updates: %v",
 					spew.Sdump(update.closedChans))
 
+				a.chanStateMtx.Lock()
 				for _, closedChan := range update.closedChans {
 					delete(a.chanState, closedChan)
 				}
+				a.chanStateMtx.Unlock()
 
 				updateBalance()
 			}
@@ -472,18 +477,28 @@ func (a *Agent) controller() {
 		// With all the updates applied, we'll obtain a set of the
 		// current active channels (confirmed channels), and also
 		// factor in our set of unconfirmed channels.
-		confirmedChans := a.chanState
+		a.chanStateMtx.Lock()
 		a.pendingMtx.Lock()
-		totalChans := mergeChanState(a.pendingOpens, confirmedChans)
+		totalChans := mergeChanState(a.pendingOpens, a.chanState)
 		a.pendingMtx.Unlock()
+		a.chanStateMtx.Unlock()
 
 		// Now that we've updated our internal state, we'll consult our
-		// channel attachment heuristic to determine if we should open
-		// up any additional channels or modify existing channels.
-		availableFunds, numChans, needMore := a.cfg.Heuristic.NeedMoreChans(
+		// channel attachment heuristic to determine if we can open
+		// up any additional channels while staying within our
+		// constraints.
+		availableFunds, numChans := a.cfg.Constraints.ChannelBudget(
 			totalChans, a.totalBalance,
 		)
-		if !needMore {
+		switch {
+		case numChans == 0:
+			continue
+
+		// If the amount is too small, we don't want to attempt opening
+		// another channel.
+		case availableFunds == 0:
+			continue
+		case availableFunds < a.cfg.Constraints.MinChanSize():
 			continue
 		}
 
@@ -505,7 +520,10 @@ func (a *Agent) openChans(availableFunds btcutil.Amount, numChans uint32,
 	// We're to attempt an attachment so we'll obtain the set of
 	// nodes that we currently have channels with so we avoid
 	// duplicate edges.
+	a.chanStateMtx.Lock()
 	connectedNodes := a.chanState.ConnectedNodes()
+	a.chanStateMtx.Unlock()
+
 	a.pendingMtx.Lock()
 	nodesToSkip := mergeNodeMaps(a.pendingOpens,
 		a.pendingConns, connectedNodes, a.failedNodes,
@@ -516,6 +534,7 @@ func (a *Agent) openChans(availableFunds btcutil.Amount, numChans uint32,
 	// want to skip.
 	selfPubBytes := a.cfg.Self.SerializeCompressed()
 	nodes := make(map[NodeID]struct{})
+	addresses := make(map[NodeID][]net.Addr)
 	if err := a.cfg.Graph.ForEachNode(func(node Node) error {
 		nID := NodeID(node.PubKey())
 
@@ -525,6 +544,14 @@ func (a *Agent) openChans(availableFunds btcutil.Amount, numChans uint32,
 		if bytes.Equal(nID[:], selfPubBytes) {
 			return nil
 		}
+
+		// If the node has no known addresses, we cannot connect to it,
+		// so we'll skip it.
+		addrs := node.Addrs()
+		if len(addrs) == 0 {
+			return nil
+		}
+		addresses[nID] = addrs
 
 		// Additionally, if this node is in the blacklist, then
 		// we'll skip it.
@@ -538,10 +565,16 @@ func (a *Agent) openChans(availableFunds btcutil.Amount, numChans uint32,
 		return fmt.Errorf("unable to get graph nodes: %v", err)
 	}
 
+	// As channel size we'll use the maximum channel size available.
+	chanSize := a.cfg.Constraints.MaxChanSize()
+	if availableFunds-chanSize < 0 {
+		chanSize = availableFunds
+	}
+
 	// Use the heuristic to calculate a score for each node in the
 	// graph.
 	scores, err := a.cfg.Heuristic.NodeScores(
-		a.cfg.Graph, totalChans, availableFunds, nodes,
+		a.cfg.Graph, totalChans, chanSize, nodes,
 	)
 	if err != nil {
 		return fmt.Errorf("unable to calculate node scores : %v", err)
@@ -549,12 +582,30 @@ func (a *Agent) openChans(availableFunds btcutil.Amount, numChans uint32,
 
 	log.Debugf("Got scores for %d nodes", len(scores))
 
-	// Now use the score to make a weighted choice which
-	// nodes to attempt to open channels to.
-	chanCandidates, err := chooseN(int(numChans), scores)
+	// Now use the score to make a weighted choice which nodes to attempt
+	// to open channels to.
+	scores, err = chooseN(numChans, scores)
 	if err != nil {
 		return fmt.Errorf("Unable to make weighted choice: %v",
 			err)
+	}
+
+	chanCandidates := make(map[NodeID]*AttachmentDirective)
+	for nID := range scores {
+		// Add addresses to the candidates.
+		addrs := addresses[nID]
+
+		// If the node has no known addresses, we cannot connect to it,
+		// so we'll skip it.
+		if len(addrs) == 0 {
+			continue
+		}
+
+		chanCandidates[nID] = &AttachmentDirective{
+			NodeID:  nID,
+			ChanAmt: chanSize,
+			Addrs:   addrs,
+		}
 	}
 
 	if len(chanCandidates) == 0 {
@@ -573,11 +624,11 @@ func (a *Agent) openChans(availableFunds btcutil.Amount, numChans uint32,
 	// available to future heuristic selections.
 	a.pendingMtx.Lock()
 	defer a.pendingMtx.Unlock()
-	if uint16(len(a.pendingOpens)) >= a.cfg.Constraints.MaxPendingOpens {
+	if uint16(len(a.pendingOpens)) >= a.cfg.Constraints.MaxPendingOpens() {
 		log.Debugf("Reached cap of %v pending "+
 			"channel opens, will retry "+
 			"after success/failure",
-			a.cfg.Constraints.MaxPendingOpens)
+			a.cfg.Constraints.MaxPendingOpens())
 		return nil
 	}
 
@@ -642,7 +693,7 @@ func (a *Agent) executeDirective(directive AttachmentDirective) {
 	// first.
 	a.pendingMtx.Lock()
 	if uint16(len(a.pendingOpens)) >=
-		a.cfg.Constraints.MaxPendingOpens {
+		a.cfg.Constraints.MaxPendingOpens() {
 		// Since we've reached our max number of pending opens, we'll
 		// disconnect this peer and exit. However, if we were
 		// previously connected to them, then we'll make sure to
@@ -716,4 +767,56 @@ func (a *Agent) executeDirective(directive AttachmentDirective) {
 	// Since the channel open was successful and is currently pending,
 	// we'll trigger the autopilot agent to query for more peers.
 	a.OnChannelPendingOpen()
+}
+
+// HeuristicScores is an alias for a map that maps heuristic names to a map of
+// scores for pubkeys.
+type HeuristicScores map[string]map[NodeID]float64
+
+// queryHeuristics gets node scores from all available simple heuristics, and
+// the agent's current active heuristic.
+func (a *Agent) queryHeuristics(nodes map[NodeID]struct{}) (
+	HeuristicScores, error) {
+
+	// Get the agent's current channel state.
+	a.chanStateMtx.Lock()
+	a.pendingMtx.Lock()
+	totalChans := mergeChanState(a.pendingOpens, a.chanState)
+	a.pendingMtx.Unlock()
+	a.chanStateMtx.Unlock()
+
+	// As channel size we'll use the maximum size.
+	chanSize := a.cfg.Constraints.MaxChanSize()
+
+	// We'll start by getting the scores from each available sub-heuristic,
+	// in addition the active agent heuristic.
+	report := make(HeuristicScores)
+	for _, h := range append(availableHeuristics, a.cfg.Heuristic) {
+		name := h.Name()
+
+		// If the active agent heuristic is among the simple heuristics
+		// it might get queried more than once. As an optimization
+		// we'll just skip it the second time.
+		if _, ok := report[name]; ok {
+			continue
+		}
+
+		s, err := h.NodeScores(
+			a.cfg.Graph, totalChans, chanSize, nodes,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("unable to get sub score: %v", err)
+		}
+
+		log.Debugf("Heuristic \"%v\" scored %d nodes", name, len(s))
+
+		scores := make(map[NodeID]float64)
+		for nID, score := range s {
+			scores[nID] = score.Score
+		}
+
+		report[name] = scores
+	}
+
+	return report, nil
 }

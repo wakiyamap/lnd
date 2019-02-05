@@ -17,6 +17,7 @@ import (
 	"github.com/coreos/bbolt"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/input"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
 )
@@ -63,7 +64,7 @@ var (
 		0xb4, 0x12, 0xa3,
 	}
 
-	testSignDesc = lnwallet.SignDescriptor{
+	testSignDesc = input.SignDescriptor{
 		SingleTweak: []byte{
 			0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
 			0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
@@ -293,7 +294,6 @@ func TestContractInsertionRetrieval(t *testing.T) {
 			resolved:        false,
 			broadcastHeight: 109,
 			chanPoint:       testChanPoint1,
-			sweepTx:         nil,
 		},
 	}
 

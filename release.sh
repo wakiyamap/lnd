@@ -16,9 +16,21 @@ else
     TAG=$1
 fi
 
+go mod vendor
+tar -cvzf vendor.tar.gz vendor
+
 PACKAGE=lnd
 MAINDIR=$PACKAGE-$TAG
 mkdir -p $MAINDIR
+
+cp vendor.tar.gz $MAINDIR/
+rm vendor.tar.gz
+rm -r vendor
+
+PACKAGESRC="$MAINDIR/$PACKAGE-source-$TAG.tar"
+git archive -o $PACKAGESRC HEAD
+gzip -f $PACKAGESRC > "$PACKAGESRC.gz"
+
 cd $MAINDIR
 
 # If LNDBUILDSYS is set the default list is ignored. Useful to release
@@ -27,13 +39,15 @@ SYS=${LNDBUILDSYS:-"windows-386 windows-amd64 openbsd-386 openbsd-amd64 linux-38
 
 # Use the first element of $GOPATH in the case where GOPATH is a list
 # (something that is totally allowed).
-GPATH=$(echo $GOPATH | cut -f1 -d:)
-COMMITFLAGS="-X main.Commit=$(git rev-parse HEAD)"
+PKG="github.com/wakiyamap/lnd"
+COMMIT=$(git describe --abbrev=40 --dirty)
+COMMITFLAGS="-X $PKG/build.Commit=$COMMIT"
 
 for i in $SYS; do
     OS=$(echo $i | cut -f1 -d-)
     ARCH=$(echo $i | cut -f2 -d-)
     ARM=
+
     if [[ $ARCH = "armv6" ]]; then
       ARCH=arm
       ARM=6
@@ -41,17 +55,21 @@ for i in $SYS; do
       ARCH=arm
       ARM=7
     fi
+
     mkdir $PACKAGE-$i-$TAG
     cd $PACKAGE-$i-$TAG
+
     echo "Building:" $OS $ARCH $ARM
     env GOOS=$OS GOARCH=$ARCH GOARM=$ARM go build -v -ldflags "$COMMITFLAGS" github.com/wakiyamap/lnd
     env GOOS=$OS GOARCH=$ARCH GOARM=$ARM go build -v -ldflags "$COMMITFLAGS" github.com/wakiyamap/lnd/cmd/lncli
     cd ..
+
     if [[ $OS = "windows" ]]; then
 	zip -r $PACKAGE-$i-$TAG.zip $PACKAGE-$i-$TAG
     else
 	tar -cvzf $PACKAGE-$i-$TAG.tar.gz $PACKAGE-$i-$TAG
     fi
+
     rm -r $PACKAGE-$i-$TAG
 done
 

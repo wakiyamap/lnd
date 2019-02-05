@@ -22,7 +22,6 @@ import (
 
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/rpcclient"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 	"github.com/go-errors/errors"
@@ -91,12 +90,24 @@ func generateListeningPorts() (int, int, int) {
 	return p2p, rpc, rest
 }
 
+// BackendConfig is an interface that abstracts away the specific chain backend
+// node implementation.
+type BackendConfig interface {
+	// GenArgs returns the arguments needed to be passed to LND at startup
+	// for using this node as a chain backend.
+	GenArgs() []string
+
+	// P2PAddr returns the address of this node to be used when connection
+	// over the Bitcoin P2P network.
+	P2PAddr() string
+}
+
 type nodeConfig struct {
-	Name      string
-	RPCConfig *rpcclient.ConnConfig
-	NetParams *chaincfg.Params
-	BaseDir   string
-	ExtraArgs []string
+	Name       string
+	BackendCfg BackendConfig
+	NetParams  *chaincfg.Params
+	BaseDir    string
+	ExtraArgs  []string
 
 	DataDir        string
 	LogDir         string
@@ -144,16 +155,13 @@ func (cfg nodeConfig) genArgs() []string {
 		args = append(args, "--bitcoin.regtest")
 	}
 
-	encodedCert := hex.EncodeToString(cfg.RPCConfig.Certificates)
+	backendArgs := cfg.BackendCfg.GenArgs()
+	args = append(args, backendArgs...)
 	args = append(args, "--bitcoin.active")
 	args = append(args, "--nobootstrap")
 	args = append(args, "--debuglevel=debug")
 	args = append(args, "--bitcoin.defaultchanconfs=1")
 	args = append(args, fmt.Sprintf("--bitcoin.defaultremotedelay=%v", DefaultCSV))
-	args = append(args, fmt.Sprintf("--btcd.rpchost=%v", cfg.RPCConfig.Host))
-	args = append(args, fmt.Sprintf("--btcd.rpcuser=%v", cfg.RPCConfig.User))
-	args = append(args, fmt.Sprintf("--btcd.rpcpass=%v", cfg.RPCConfig.Pass))
-	args = append(args, fmt.Sprintf("--btcd.rawrpccert=%v", encodedCert))
 	args = append(args, fmt.Sprintf("--rpclisten=%v", cfg.RPCAddr()))
 	args = append(args, fmt.Sprintf("--restlisten=%v", cfg.RESTAddr()))
 	args = append(args, fmt.Sprintf("--listen=%v", cfg.P2PAddr()))
@@ -426,6 +434,8 @@ func (hn *HarnessNode) Init(ctx context.Context,
 
 // initLightningClient constructs the grpc LightningClient from the given client
 // connection and subscribes the harness node to graph topology updates.
+// This method also spawns a lightning network watcher for this node,
+// which watches for topology changes.
 func (hn *HarnessNode) initLightningClient(conn *grpc.ClientConn) error {
 	// Construct the LightningClient that will allow us to use the
 	// HarnessNode directly for normal rpc operations.
@@ -445,9 +455,7 @@ func (hn *HarnessNode) initLightningClient(conn *grpc.ClientConn) error {
 	return nil
 }
 
-// FetchNodeInfo queries an unlocked node to retrieve its public key. This
-// method also spawns a lightning network watcher for this node, which watches
-// for topology changes.
+// FetchNodeInfo queries an unlocked node to retrieve its public key.
 func (hn *HarnessNode) FetchNodeInfo() error {
 	// Obtain the lnid of this node for quick identification purposes.
 	ctxb := context.Background()
@@ -907,7 +915,7 @@ func (hn *HarnessNode) WaitForBlockchainSync(ctx context.Context) error {
 
 // WaitForBalance waits until the node sees the expected confirmed/unconfirmed
 // balance within their wallet.
-func (hn *HarnessNode) WaitForBalance(expectedBalance int64, confirmed bool) error {
+func (hn *HarnessNode) WaitForBalance(expectedBalance btcutil.Amount, confirmed bool) error {
 	ctx := context.Background()
 	req := &lnrpc.WalletBalanceRequest{}
 
@@ -920,11 +928,11 @@ func (hn *HarnessNode) WaitForBalance(expectedBalance int64, confirmed bool) err
 
 		if confirmed {
 			lastBalance = btcutil.Amount(balance.ConfirmedBalance)
-			return balance.ConfirmedBalance == expectedBalance
+			return btcutil.Amount(balance.ConfirmedBalance) == expectedBalance
 		}
 
 		lastBalance = btcutil.Amount(balance.UnconfirmedBalance)
-		return balance.UnconfirmedBalance == expectedBalance
+		return btcutil.Amount(balance.UnconfirmedBalance) == expectedBalance
 	}
 
 	err := WaitPredicate(doesBalanceMatch, 30*time.Second)

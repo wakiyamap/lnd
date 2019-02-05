@@ -15,11 +15,11 @@ import (
 	macaroon "gopkg.in/macaroon.v2"
 
 	"github.com/btcsuite/btcutil"
+	"github.com/urfave/cli"
 	"github.com/wakiyamap/lnd/build"
 	"github.com/wakiyamap/lnd/lncfg"
 	"github.com/wakiyamap/lnd/lnrpc"
 	"github.com/wakiyamap/lnd/macaroons"
-	"github.com/urfave/cli"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -37,6 +37,10 @@ const (
 var (
 	defaultLndDir      = btcutil.AppDataDir("lnd", false)
 	defaultTLSCertPath = filepath.Join(defaultLndDir, defaultTLSCertFilename)
+
+	// maxMsgRecvSize is the largest message our client will receive. We
+	// set this to ~50Mb atm.
+	maxMsgRecvSize = grpc.MaxCallRecvMsgSize(1 * 1024 * 1024 * 50)
 )
 
 func fatal(err error) {
@@ -131,11 +135,10 @@ func getClientConn(ctx *cli.Context, skipMacaroons bool) *grpc.ClientConn {
 
 	// We need to use a custom dialer so we can also connect to unix sockets
 	// and not just TCP addresses.
-	opts = append(
-		opts, grpc.WithDialer(
-			lncfg.ClientAddressDialer(defaultRPCPort),
-		),
-	)
+	genericDialer := lncfg.ClientAddressDialer(defaultRPCPort)
+	opts = append(opts, grpc.WithDialer(genericDialer))
+	opts = append(opts, grpc.WithDefaultCallOptions(maxMsgRecvSize))
+
 	conn, err := grpc.Dial(ctx.GlobalString("rpcserver"), opts...)
 	if err != nil {
 		fatal(fmt.Errorf("unable to connect to RPC server: %v", err))

@@ -25,6 +25,7 @@ import (
 	"github.com/wakiyamap/lnd/chainntnfs/neutrinonotify"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/htlcswitch"
+	"github.com/wakiyamap/lnd/input"
 	"github.com/wakiyamap/lnd/keychain"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwallet/btcwallet"
@@ -63,14 +64,14 @@ const (
 // TODO(halseth): make configurable at startup?
 var defaultBtcChannelConstraints = channeldb.ChannelConstraints{
 	DustLimit:        lnwallet.DefaultDustLimit(),
-	MaxAcceptedHtlcs: lnwallet.MaxHTLCNumber / 2,
+	MaxAcceptedHtlcs: input.MaxHTLCNumber / 2,
 }
 
-// defaultMonaChannelConstraints is the default set of channel constraints that are
-// meant to be used when initially funding a Monacoin channel.
+// defaultLtcChannelConstraints is the default set of channel constraints that are
+// meant to be used when initially funding a Litecoin channel.
 var defaultMonaChannelConstraints = channeldb.ChannelConstraints{
 	DustLimit:        defaultMonacoinDustLimit,
-	MaxAcceptedHtlcs: lnwallet.MaxHTLCNumber / 2,
+	MaxAcceptedHtlcs: input.MaxHTLCNumber / 2,
 }
 
 // chainCode is an enum-like structure for keeping track of the chains
@@ -105,7 +106,7 @@ type chainControl struct {
 
 	feeEstimator lnwallet.FeeEstimator
 
-	signer lnwallet.Signer
+	signer input.Signer
 
 	keyRing keychain.KeyRing
 
@@ -256,12 +257,7 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 		// Next we'll create the instances of the ChainNotifier and
 		// FilteredChainView interface which is backed by the neutrino
 		// light client.
-		cc.chainNotifier, err = neutrinonotify.New(
-			svc, hintCache, hintCache,
-		)
-		if err != nil {
-			return nil, nil, err
-		}
+		cc.chainNotifier = neutrinonotify.New(svc, hintCache, hintCache)
 		cc.chainView, err = chainview.NewCfFilteredChainView(svc)
 		if err != nil {
 			return nil, nil, err
@@ -336,7 +332,7 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 		}
 
 		cc.chainNotifier = bitcoindnotify.New(
-			bitcoindConn, hintCache, hintCache,
+			bitcoindConn, activeNetParams.Params, hintCache, hintCache,
 		)
 		cc.chainView = chainview.NewBitcoindFilteredChainView(bitcoindConn)
 		walletConfig.ChainSource = bitcoindConn.NewBitcoindClient()
@@ -446,7 +442,7 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 			DisableAutoReconnect: false,
 		}
 		cc.chainNotifier, err = btcdnotify.New(
-			rpcConfig, hintCache, hintCache,
+			rpcConfig, activeNetParams.Params, hintCache, hintCache,
 		)
 		if err != nil {
 			return nil, nil, err

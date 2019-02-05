@@ -35,6 +35,7 @@ import (
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/chainntnfs/btcdnotify"
 	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/input"
 	"github.com/wakiyamap/lnd/keychain"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwallet/btcwallet"
@@ -353,7 +354,7 @@ func loadTestCredits(miner *rpctest.Harness, w *lnwallet.LightningWallet,
 func createTestWallet(tempTestDir string, miningNode *rpctest.Harness,
 	netParams *chaincfg.Params, notifier chainntnfs.ChainNotifier,
 	wc lnwallet.WalletController, keyRing keychain.SecretKeyRing,
-	signer lnwallet.Signer, bio lnwallet.BlockChainIO) (*lnwallet.LightningWallet, error) {
+	signer input.Signer, bio lnwallet.BlockChainIO) (*lnwallet.LightningWallet, error) {
 
 	dbDir := filepath.Join(tempTestDir, "cdb")
 	cdb, err := channeldb.Open(dbDir)
@@ -429,11 +430,15 @@ func testDualFundingReservationWorkflow(miner *rpctest.Harness,
 		t.Fatalf("unable to initialize funding reservation: %v", err)
 	}
 	aliceChanReservation.SetNumConfsRequired(numReqConfs)
-	err = aliceChanReservation.CommitConstraints(
-		csvDelay, lnwallet.MaxHTLCNumber/2,
-		lnwire.NewMSatFromSatoshis(fundingAmount), 1, fundingAmount/100,
-		lnwallet.DefaultDustLimit(),
-	)
+	channelConstraints := &channeldb.ChannelConstraints{
+		DustLimit:        lnwallet.DefaultDustLimit(),
+		ChanReserve:      fundingAmount / 100,
+		MaxPendingAmount: lnwire.NewMSatFromSatoshis(fundingAmount),
+		MinHTLC:          1,
+		MaxAcceptedHtlcs: input.MaxHTLCNumber / 2,
+		CsvDelay:         csvDelay,
+	}
+	err = aliceChanReservation.CommitConstraints(channelConstraints)
 	if err != nil {
 		t.Fatalf("unable to verify constraints: %v", err)
 	}
@@ -467,11 +472,7 @@ func testDualFundingReservationWorkflow(miner *rpctest.Harness,
 	if err != nil {
 		t.Fatalf("bob unable to init channel reservation: %v", err)
 	}
-	err = bobChanReservation.CommitConstraints(
-		csvDelay, lnwallet.MaxHTLCNumber/2,
-		lnwire.NewMSatFromSatoshis(fundingAmount), 1, fundingAmount/100,
-		lnwallet.DefaultDustLimit(),
-	)
+	err = bobChanReservation.CommitConstraints(channelConstraints)
 	if err != nil {
 		t.Fatalf("unable to verify constraints: %v", err)
 	}
@@ -861,11 +862,15 @@ func testSingleFunderReservationWorkflow(miner *rpctest.Harness,
 		t.Fatalf("unable to init channel reservation: %v", err)
 	}
 	aliceChanReservation.SetNumConfsRequired(numReqConfs)
-	err = aliceChanReservation.CommitConstraints(
-		csvDelay, lnwallet.MaxHTLCNumber/2,
-		lnwire.NewMSatFromSatoshis(fundingAmt), 1, fundingAmt/100,
-		lnwallet.DefaultDustLimit(),
-	)
+	channelConstraints := &channeldb.ChannelConstraints{
+		DustLimit:        lnwallet.DefaultDustLimit(),
+		ChanReserve:      fundingAmt / 100,
+		MaxPendingAmount: lnwire.NewMSatFromSatoshis(fundingAmt),
+		MinHTLC:          1,
+		MaxAcceptedHtlcs: input.MaxHTLCNumber / 2,
+		CsvDelay:         csvDelay,
+	}
+	err = aliceChanReservation.CommitConstraints(channelConstraints)
 	if err != nil {
 		t.Fatalf("unable to verify constraints: %v", err)
 	}
@@ -899,11 +904,7 @@ func testSingleFunderReservationWorkflow(miner *rpctest.Harness,
 	if err != nil {
 		t.Fatalf("unable to create bob reservation: %v", err)
 	}
-	err = bobChanReservation.CommitConstraints(
-		csvDelay, lnwallet.MaxHTLCNumber/2,
-		lnwire.NewMSatFromSatoshis(fundingAmt), 1, fundingAmt/100,
-		lnwallet.DefaultDustLimit(),
-	)
+	err = bobChanReservation.CommitConstraints(channelConstraints)
 	if err != nil {
 		t.Fatalf("unable to verify constraints: %v", err)
 	}
@@ -1528,7 +1529,7 @@ func testPublishTransaction(r *rpctest.Harness,
 
 		// Now we can populate the sign descriptor which we'll use to
 		// generate the signature.
-		signDesc := &lnwallet.SignDescriptor{
+		signDesc := &input.SignDescriptor{
 			KeyDesc: keychain.KeyDescriptor{
 				PubKey: pubKey.PubKey,
 			},
@@ -1783,10 +1784,10 @@ func testSignOutputUsingTweaks(r *rpctest.Harness,
 	commitSecret, commitPoint := btcec.PrivKeyFromBytes(btcec.S256(),
 		commitPreimage)
 
-	revocationKey := lnwallet.DeriveRevocationPubkey(pubKey.PubKey, commitPoint)
-	commitTweak := lnwallet.SingleTweakBytes(commitPoint, pubKey.PubKey)
+	revocationKey := input.DeriveRevocationPubkey(pubKey.PubKey, commitPoint)
+	commitTweak := input.SingleTweakBytes(commitPoint, pubKey.PubKey)
 
-	tweakedPub := lnwallet.TweakPubKey(pubKey.PubKey, commitPoint)
+	tweakedPub := input.TweakPubKey(pubKey.PubKey, commitPoint)
 
 	// As we'd like to test both single and double tweaks, we'll repeat
 	// the same set up twice. The first will use a regular single tweak,
@@ -1856,7 +1857,7 @@ func testSignOutputUsingTweaks(r *rpctest.Harness,
 		// private tweak value as the key in the script is derived
 		// based on this tweak value and the key we originally
 		// generated above.
-		signDesc := &lnwallet.SignDescriptor{
+		signDesc := &input.SignDescriptor{
 			KeyDesc: keychain.KeyDescriptor{
 				PubKey: baseKey.PubKey,
 			},
@@ -2362,7 +2363,9 @@ func TestLightningWallet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to create height hint cache: %v", err)
 	}
-	chainNotifier, err := btcdnotify.New(&rpcConfig, hintCache, hintCache)
+	chainNotifier, err := btcdnotify.New(
+		&rpcConfig, netParams, hintCache, hintCache,
+	)
 	if err != nil {
 		t.Fatalf("unable to create notifier: %v", err)
 	}
@@ -2390,8 +2393,8 @@ func runTests(t *testing.T, walletDriver *lnwallet.WalletDriver,
 	var (
 		bio lnwallet.BlockChainIO
 
-		aliceSigner lnwallet.Signer
-		bobSigner   lnwallet.Signer
+		aliceSigner input.Signer
+		bobSigner   input.Signer
 
 		aliceKeyRing keychain.SecretKeyRing
 		bobKeyRing   keychain.SecretKeyRing

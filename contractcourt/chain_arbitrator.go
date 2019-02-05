@@ -6,15 +6,16 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/wakiyamap/lnd/sweep"
-
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/input"
+	"github.com/wakiyamap/lnd/lntypes"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
+	"github.com/wakiyamap/lnd/sweep"
 )
 
 // ErrChainArbExiting signals that the chain arbitrator is shutting down.
@@ -121,7 +122,7 @@ type ChainArbitratorConfig struct {
 	// Signer is a signer backed by the active lnd node. This should be
 	// capable of producing a signature as specified by a valid
 	// SignDescriptor.
-	Signer lnwallet.Signer
+	Signer input.Signer
 
 	// FeeEstimator will be used to return fee estimates.
 	FeeEstimator lnwallet.FeeEstimator
@@ -135,6 +136,11 @@ type ChainArbitratorConfig struct {
 
 	// Sweeper allows resolvers to sweep their final outputs.
 	Sweeper *sweep.UtxoSweeper
+
+	// SettleInvoice attempts to settle an existing invoice on-chain with
+	// the given payment hash. ErrInvoiceNotFound is returned if an invoice
+	// is not found.
+	SettleInvoice func(lntypes.Hash, lnwire.MilliSatoshi) error
 }
 
 // ChainArbitrator is a sub-system that oversees the on-chain resolution of all
@@ -220,22 +226,9 @@ func newActiveChannelArbitrator(channel *channeldb.OpenChannel,
 			// With the channels fetched, attempt to locate
 			// the target channel according to its channel
 			// point.
-			dbChannels, err := c.chanSource.FetchAllChannels()
+			channel, err := c.chanSource.FetchChannel(chanPoint)
 			if err != nil {
 				return nil, err
-			}
-			var channel *channeldb.OpenChannel
-			for _, dbChannel := range dbChannels {
-				if dbChannel.FundingOutpoint == chanPoint {
-					channel = dbChannel
-					break
-				}
-			}
-
-			// If the channel cannot be located, then we
-			// exit with an error to the channel.
-			if channel == nil {
-				return nil, fmt.Errorf("unable to find channel")
 			}
 
 			chanMachine, err := lnwallet.NewLightningChannel(
@@ -572,6 +565,21 @@ func (c *ChainArbitrator) UpdateContractSignals(chanPoint wire.OutPoint,
 	arbitrator.UpdateContractSignals(signals)
 
 	return nil
+}
+
+// GetChannelArbitrator safely returns the channel arbitrator for a given
+// channel outpoint.
+func (c *ChainArbitrator) GetChannelArbitrator(chanPoint wire.OutPoint) (
+	*ChannelArbitrator, error) {
+
+	c.Lock()
+	arbitrator, ok := c.activeChannels[chanPoint]
+	c.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("unable to find arbitrator")
+	}
+
+	return arbitrator, nil
 }
 
 // forceCloseReq is a request sent from an outside sub-system to the arbitrator

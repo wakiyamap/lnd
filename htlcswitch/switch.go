@@ -17,7 +17,6 @@ import (
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/contractcourt"
-	"github.com/wakiyamap/lnd/lnrpc"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/wakiyamap/lnd/ticker"
@@ -119,7 +118,7 @@ type ChanClose struct {
 
 	// Updates is used by request creator to receive the notifications about
 	// execution of the close channel request.
-	Updates chan *lnrpc.CloseStatusUpdate
+	Updates chan interface{}
 
 	// Err is used by request creator to receive request execution error.
 	Err chan error
@@ -1415,11 +1414,11 @@ func (s *Switch) teardownCircuit(pkt *htlcPacket) error {
 // then the last parameter should be the ideal fee-per-kw that will be used as
 // a starting point for close negotiation.
 func (s *Switch) CloseLink(chanPoint *wire.OutPoint, closeType ChannelCloseType,
-	targetFeePerKw lnwallet.SatPerKWeight) (chan *lnrpc.CloseStatusUpdate,
+	targetFeePerKw lnwallet.SatPerKWeight) (chan interface{},
 	chan error) {
 
 	// TODO(roasbeef) abstract out the close updates.
-	updateChan := make(chan *lnrpc.CloseStatusUpdate, 2)
+	updateChan := make(chan interface{}, 2)
 	errChan := make(chan error, 1)
 
 	command := &ChanClose{
@@ -1782,9 +1781,14 @@ func (s *Switch) loadChannelFwdPkgs(source lnwire.ShortChannelID) ([]*channeldb.
 // NOTE: This should mimic the behavior processRemoteSettleFails.
 func (s *Switch) reforwardSettleFails(fwdPkgs []*channeldb.FwdPkg) {
 	for _, fwdPkg := range fwdPkgs {
-		settleFails := lnwallet.PayDescsFromRemoteLogUpdates(
+		settleFails, err := lnwallet.PayDescsFromRemoteLogUpdates(
 			fwdPkg.Source, fwdPkg.Height, fwdPkg.SettleFails,
 		)
+		if err != nil {
+			log.Errorf("Unable to process remote log updates: %v",
+				err)
+			continue
+		}
 
 		switchPackets := make([]*htlcPacket, 0, len(settleFails))
 		for i, pd := range settleFails {
@@ -1991,13 +1995,16 @@ func (s *Switch) getLinkByShortID(chanID lnwire.ShortChannelID) (ChannelLink, er
 }
 
 // HasActiveLink returns true if the given channel ID has a link in the link
-// index.
+// index AND the link is eligible to forward.
 func (s *Switch) HasActiveLink(chanID lnwire.ChannelID) bool {
 	s.indexMtx.RLock()
 	defer s.indexMtx.RUnlock()
 
-	_, ok := s.linkIndex[chanID]
-	return ok
+	if link, ok := s.linkIndex[chanID]; ok {
+		return link.EligibleToForward()
+	}
+
+	return false
 }
 
 // RemoveLink purges the switch of any link associated with chanID. If a pending

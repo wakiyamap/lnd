@@ -1,9 +1,9 @@
 package htlcswitch
 
 import (
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/lnpeer"
+	"github.com/wakiyamap/lnd/lntypes"
 	"github.com/wakiyamap/lnd/lnwire"
 )
 
@@ -14,11 +14,11 @@ type InvoiceDatabase interface {
 	// byte payment hash. This method should also reutrn the min final CLTV
 	// delta for this invoice. We'll use this to ensure that the HTLC
 	// extended to us gives us enough time to settle as we prescribe.
-	LookupInvoice(chainhash.Hash) (channeldb.Invoice, uint32, error)
+	LookupInvoice(lntypes.Hash) (channeldb.Invoice, uint32, error)
 
 	// SettleInvoice attempts to mark an invoice corresponding to the
 	// passed payment hash as fully settled.
-	SettleInvoice(payHash chainhash.Hash, paidAmount lnwire.MilliSatoshi) error
+	SettleInvoice(payHash lntypes.Hash, paidAmount lnwire.MilliSatoshi) error
 }
 
 // ChannelLink is an interface which represents the subsystem for managing the

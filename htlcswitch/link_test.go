@@ -26,6 +26,7 @@ import (
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/contractcourt"
 	"github.com/wakiyamap/lnd/htlcswitch/hodl"
+	"github.com/wakiyamap/lnd/input"
 	"github.com/wakiyamap/lnd/lnpeer"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
@@ -236,7 +237,7 @@ func TestChannelLinkSingleHopPayment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to get invoice: %v", err)
 	}
-	if !invoice.Terms.Settled {
+	if invoice.Terms.State != channeldb.ContractSettled {
 		t.Fatal("alice invoice wasn't settled")
 	}
 
@@ -302,7 +303,7 @@ func TestChannelLinkBidirectionalOneHopPayments(t *testing.T) {
 
 	// Send max available payment number in both sides, thereby testing
 	// the property of channel link to cope with overflowing.
-	count := 2 * lnwallet.MaxHTLCNumber
+	count := 2 * input.MaxHTLCNumber
 	resultChan := make(chan *result, count)
 	for i := 0; i < count/2; i++ {
 		go func(i int) {
@@ -467,7 +468,7 @@ func TestChannelLinkMultiHopPayment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to get invoice: %v", err)
 	}
-	if !invoice.Terms.Settled {
+	if invoice.Terms.State != channeldb.ContractSettled {
 		t.Fatal("carol invoice haven't been settled")
 	}
 
@@ -587,11 +588,11 @@ func TestExitNodeAmountPayloadMismatch(t *testing.T) {
 	).Wait(30 * time.Second)
 	if err == nil {
 		t.Fatalf("payment should have failed but didn't")
-	} else if err.Error() != lnwire.CodeIncorrectPaymentAmount.String() {
+	} else if !strings.Contains(err.Error(), lnwire.CodeUnknownPaymentHash.String()) {
 		// TODO(roasbeef): use proper error after error propagation is
 		// in
-		t.Fatalf("incorrect error, expected insufficient value, "+
-			"instead have: %v", err)
+		t.Fatalf("expected %v got %v", err,
+			lnwire.CodeUnknownPaymentHash)
 	}
 }
 
@@ -818,7 +819,7 @@ func TestUpdateForwardingPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to get invoice: %v", err)
 	}
-	if !invoice.Terms.Settled {
+	if invoice.Terms.State != channeldb.ContractSettled {
 		t.Fatal("carol invoice haven't been settled")
 	}
 
@@ -937,7 +938,7 @@ func TestChannelLinkMultiHopInsufficientPayment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to get invoice: %v", err)
 	}
-	if invoice.Terms.Settled {
+	if invoice.Terms.State == channeldb.ContractSettled {
 		t.Fatal("carol invoice have been settled")
 	}
 
@@ -1017,8 +1018,9 @@ func TestChannelLinkMultiHopUnknownPaymentHash(t *testing.T) {
 		n.firstBobChannelLink.ShortChanID(), htlc,
 		newMockDeobfuscator(),
 	)
-	if err.Error() != lnwire.CodeUnknownPaymentHash.String() {
-		t.Fatal("error haven't been received")
+	if !strings.Contains(err.Error(), lnwire.CodeUnknownPaymentHash.String()) {
+		t.Fatalf("expected %v got %v", err,
+			lnwire.CodeUnknownPaymentHash)
 	}
 
 	// Wait for Alice to receive the revocation.
@@ -1026,7 +1028,7 @@ func TestChannelLinkMultiHopUnknownPaymentHash(t *testing.T) {
 
 	// Check that alice invoice wasn't settled and bandwidth of htlc
 	// links hasn't been changed.
-	if invoice.Terms.Settled {
+	if invoice.Terms.State == channeldb.ContractSettled {
 		t.Fatal("alice invoice was settled")
 	}
 
@@ -1112,7 +1114,7 @@ func TestChannelLinkMultiHopUnknownNextHop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to get invoice: %v", err)
 	}
-	if invoice.Terms.Settled {
+	if invoice.Terms.State == channeldb.ContractSettled {
 		t.Fatal("carol invoice have been settled")
 	}
 
@@ -1227,7 +1229,7 @@ func TestChannelLinkMultiHopDecodeError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to get invoice: %v", err)
 	}
-	if invoice.Terms.Settled {
+	if invoice.Terms.State == channeldb.ContractSettled {
 		t.Fatal("carol invoice have been settled")
 	}
 
@@ -1801,7 +1803,7 @@ func TestChannelLinkBandwidthConsistency(t *testing.T) {
 		t.Fatalf("unable to query fee estimator: %v", err)
 	}
 	htlcFee := lnwire.NewMSatFromSatoshis(
-		feePerKw.FeeForWeight(lnwallet.HtlcWeight),
+		feePerKw.FeeForWeight(input.HtlcWeight),
 	)
 
 	// The starting bandwidth of the channel should be exactly the amount
@@ -2241,7 +2243,7 @@ func TestChannelLinkBandwidthConsistencyOverflow(t *testing.T) {
 	// consistency along the way
 	htlcAmt := lnwire.NewMSatFromSatoshis(100000)
 	totalHtlcAmt := lnwire.MilliSatoshi(0)
-	const numHTLCs = lnwallet.MaxHTLCNumber / 2
+	const numHTLCs = input.MaxHTLCNumber / 2
 	var preImages [][32]byte
 	for i := 0; i < numHTLCs; i++ {
 		preImage := addLinkHTLC(htlcID, htlcAmt)
@@ -2279,7 +2281,7 @@ func TestChannelLinkBandwidthConsistencyOverflow(t *testing.T) {
 
 	// TODO(roasbeef): increase sleep
 	time.Sleep(time.Second * 1)
-	commitWeight := lnwallet.CommitWeight + lnwallet.HtlcWeight*numHTLCs
+	commitWeight := input.CommitWeight + input.HtlcWeight*numHTLCs
 	htlcFee := lnwire.NewMSatFromSatoshis(
 		feePerKw.FeeForWeight(commitWeight),
 	)
@@ -2461,7 +2463,7 @@ func TestChannelLinkTrimCircuitsPending(t *testing.T) {
 
 	defaultCommitFee := alice.channel.StateSnapshot().CommitFee
 	htlcFee := lnwire.NewMSatFromSatoshis(
-		feePerKw.FeeForWeight(lnwallet.HtlcWeight),
+		feePerKw.FeeForWeight(input.HtlcWeight),
 	)
 
 	// The starting bandwidth of the channel should be exactly the amount
@@ -2739,7 +2741,7 @@ func TestChannelLinkTrimCircuitsNoCommit(t *testing.T) {
 
 	defaultCommitFee := alice.channel.StateSnapshot().CommitFee
 	htlcFee := lnwire.NewMSatFromSatoshis(
-		feePerKw.FeeForWeight(lnwallet.HtlcWeight),
+		feePerKw.FeeForWeight(input.HtlcWeight),
 	)
 
 	// The starting bandwidth of the channel should be exactly the amount
@@ -2995,7 +2997,7 @@ func TestChannelLinkBandwidthChanReserve(t *testing.T) {
 		t.Fatalf("unable to query fee estimator: %v", err)
 	}
 	htlcFee := lnwire.NewMSatFromSatoshis(
-		feePerKw.FeeForWeight(lnwallet.HtlcWeight),
+		feePerKw.FeeForWeight(input.HtlcWeight),
 	)
 
 	// The starting bandwidth of the channel should be exactly the amount
@@ -3332,7 +3334,7 @@ func TestChannelRetransmission(t *testing.T) {
 				err = errors.Errorf("unable to get invoice: %v", err)
 				continue
 			}
-			if !invoice.Terms.Settled {
+			if invoice.Terms.State != channeldb.ContractSettled {
 				err = errors.Errorf("alice invoice haven't been settled")
 				continue
 			}
@@ -3828,7 +3830,7 @@ func TestChannelLinkAcceptOverpay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to get invoice: %v", err)
 	}
-	if !invoice.Terms.Settled {
+	if invoice.Terms.State != channeldb.ContractSettled {
 		t.Fatal("carol invoice haven't been settled")
 	}
 

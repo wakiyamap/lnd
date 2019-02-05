@@ -9,16 +9,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-errors/errors"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/contractcourt"
 	"github.com/wakiyamap/lnd/htlcswitch/hodl"
+	"github.com/wakiyamap/lnd/input"
 	"github.com/wakiyamap/lnd/lnpeer"
+	"github.com/wakiyamap/lnd/lntypes"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/wakiyamap/lnd/ticker"	
+	"github.com/wakiyamap/lnd/ticker"
 )
 
 func init() {
@@ -348,7 +349,7 @@ func NewChannelLink(cfg ChannelLinkConfig,
 		shortChanID: channel.ShortChanID(),
 		// TODO(roasbeef): just do reserve here?
 		logCommitTimer: time.NewTimer(300 * time.Millisecond),
-		overflowQueue:  newPacketQueue(lnwallet.MaxHTLCNumber / 2),
+		overflowQueue:  newPacketQueue(input.MaxHTLCNumber / 2),
 		htlcUpdates:    make(chan []channeldb.HTLC),
 		quit:           make(chan struct{}),
 	}
@@ -681,9 +682,14 @@ func (l *channelLink) resolveFwdPkg(fwdPkg *channeldb.FwdPkg) (bool, error) {
 	// If the package is fully acked but not completed, it must still have
 	// settles and fails to propagate.
 	if !fwdPkg.SettleFailFilter.IsFull() {
-		settleFails := lnwallet.PayDescsFromRemoteLogUpdates(
+		settleFails, err := lnwallet.PayDescsFromRemoteLogUpdates(
 			fwdPkg.Source, fwdPkg.Height, fwdPkg.SettleFails,
 		)
+		if err != nil {
+			l.errorf("Unable to process remote log updates: %v",
+				err)
+			return false, err
+		}
 		l.processRemoteSettleFails(fwdPkg, settleFails)
 	}
 
@@ -693,9 +699,14 @@ func (l *channelLink) resolveFwdPkg(fwdPkg *channeldb.FwdPkg) (bool, error) {
 	// batch of adds presented to the sphinx router does not ever change.
 	var needUpdate bool
 	if !fwdPkg.AckFilter.IsFull() {
-		adds := lnwallet.PayDescsFromRemoteLogUpdates(
+		adds, err := lnwallet.PayDescsFromRemoteLogUpdates(
 			fwdPkg.Source, fwdPkg.Height, fwdPkg.Adds,
 		)
+		if err != nil {
+			l.errorf("Unable to process remote log updates: %v",
+				err)
+			return false, err
+		}
 		needUpdate = l.processRemoteAdds(fwdPkg, adds)
 
 		// If the link failed during processing the adds, we must
@@ -2301,14 +2312,16 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 			// We're the designated payment destination.  Therefore
 			// we attempt to see if we have an invoice locally
 			// which'll allow us to settle this htlc.
-			invoiceHash := chainhash.Hash(pd.RHash)
+			invoiceHash := lntypes.Hash(pd.RHash)
 			invoice, minCltvDelta, err := l.cfg.Registry.LookupInvoice(
 				invoiceHash,
 			)
 			if err != nil {
 				log.Errorf("unable to query invoice registry: "+
 					" %v", err)
-				failure := lnwire.FailUnknownPaymentHash{}
+				failure := lnwire.NewFailUnknownPaymentHash(
+					pd.Amount,
+				)
 				l.sendHTLCError(
 					pd.HtlcIndex, failure, obfuscator, pd.SourceRef,
 				)
@@ -2334,7 +2347,7 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 			// TODO(conner): track ownership of settlements to
 			// properly recover from failures? or add batch invoice
 			// settlement
-			if invoice.Terms.Settled {
+			if invoice.Terms.State != channeldb.ContractOpen {
 				log.Warnf("Accepting duplicate payment for "+
 					"hash=%x", pd.RHash[:])
 			}
@@ -2357,7 +2370,9 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 					"amount: expected %v, received %v",
 					invoice.Terms.Value, pd.Amount)
 
-				failure := lnwire.FailIncorrectPaymentAmount{}
+				failure := lnwire.NewFailUnknownPaymentHash(
+					pd.Amount,
+				)
 				l.sendHTLCError(
 					pd.HtlcIndex, failure, obfuscator, pd.SourceRef,
 				)
@@ -2384,7 +2399,9 @@ func (l *channelLink) processRemoteAdds(fwdPkg *channeldb.FwdPkg,
 					"got %v", pd.RHash, invoice.Terms.Value,
 					fwdInfo.AmountToForward)
 
-				failure := lnwire.FailIncorrectPaymentAmount{}
+				failure := lnwire.NewFailUnknownPaymentHash(
+					pd.Amount,
+				)
 				l.sendHTLCError(
 					pd.HtlcIndex, failure, obfuscator, pd.SourceRef,
 				)
