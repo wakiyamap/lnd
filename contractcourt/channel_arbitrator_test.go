@@ -11,7 +11,6 @@ import (
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/input"
-	"github.com/wakiyamap/lnd/lntypes"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
 )
@@ -175,9 +174,6 @@ func createTestChannelArbitrator(log ArbitratorLog) (*ChannelArbitrator,
 		IncubateOutputs: func(wire.OutPoint, *lnwallet.CommitOutputResolution,
 			*lnwallet.OutgoingHtlcResolution,
 			*lnwallet.IncomingHtlcResolution, uint32) error {
-			return nil
-		},
-		SettleInvoice: func(lntypes.Hash, lnwire.MilliSatoshi) error {
 			return nil
 		},
 	}

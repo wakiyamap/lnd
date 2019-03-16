@@ -170,6 +170,10 @@ func (n *testNode) SendMessage(_ bool, msg ...lnwire.Message) error {
 	return n.sendMessage(msg[0])
 }
 
+func (n *testNode) SendMessageLazy(sync bool, msgs ...lnwire.Message) error {
+	return n.SendMessage(sync, msgs...)
+}
+
 func (n *testNode) WipeChannel(_ *wire.OutPoint) error {
 	return nil
 }
@@ -353,8 +357,9 @@ func createTestFundingManager(t *testing.T, privKey *btcec.PrivateKey,
 			publTxChan <- txn
 			return nil
 		},
-		ZombieSweeperInterval: 1 * time.Hour,
-		ReservationTimeout:    1 * time.Nanosecond,
+		ZombieSweeperInterval:  1 * time.Hour,
+		ReservationTimeout:     1 * time.Nanosecond,
+		NotifyOpenChannelEvent: func(wire.OutPoint) {},
 	})
 	if err != nil {
 		t.Fatalf("failed creating fundingManager: %v", err)

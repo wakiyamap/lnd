@@ -12,7 +12,7 @@ import (
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/input"
-	"github.com/wakiyamap/lnd/lntypes"
+	"github.com/wakiyamap/lnd/invoices"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/wakiyamap/lnd/sweep"
@@ -137,10 +137,13 @@ type ChainArbitratorConfig struct {
 	// Sweeper allows resolvers to sweep their final outputs.
 	Sweeper *sweep.UtxoSweeper
 
-	// SettleInvoice attempts to settle an existing invoice on-chain with
-	// the given payment hash. ErrInvoiceNotFound is returned if an invoice
-	// is not found.
-	SettleInvoice func(lntypes.Hash, lnwire.MilliSatoshi) error
+	// Registry is the invoice database that is used by resolvers to lookup
+	// preimages and settle invoices.
+	Registry *invoices.InvoiceRegistry
+
+	// NotifyClosedChannel is a function closure that the ChainArbitrator
+	// will use to notify the ChannelNotifier about a newly closed channel.
+	NotifyClosedChannel func(wire.OutPoint)
 }
 
 // ChainArbitrator is a sub-system that oversees the on-chain resolution of all
@@ -223,32 +226,50 @@ func newActiveChannelArbitrator(channel *channeldb.OpenChannel,
 		ShortChanID: channel.ShortChanID(),
 		BlockEpochs: blockEpoch,
 		ForceCloseChan: func() (*lnwallet.LocalForceCloseSummary, error) {
-			// With the channels fetched, attempt to locate
-			// the target channel according to its channel
-			// point.
+			// First, we mark the channel as borked, this ensure
+			// that no new state transitions can happen, and also
+			// that the link won't be loaded into the switch.
+			if err := channel.MarkBorked(); err != nil {
+				return nil, err
+			}
+
+			// With the channel marked as borked, we'll now remove
+			// the link from the switch if its there. If the link
+			// is active, then this method will block until it
+			// exits.
+			if err := c.cfg.MarkLinkInactive(chanPoint); err != nil {
+				log.Errorf("unable to mark link inactive: %v", err)
+			}
+
+			// Now that we know the link can't mutate the channel
+			// state, we'll read the channel from disk the target
+			// channel according to its channel point.
 			channel, err := c.chanSource.FetchChannel(chanPoint)
 			if err != nil {
 				return nil, err
 			}
 
+			// Finally, we'll force close the channel completing
+			// the force close workflow.
 			chanMachine, err := lnwallet.NewLightningChannel(
 				c.cfg.Signer, c.cfg.PreimageDB, channel, nil,
 			)
 			if err != nil {
 				return nil, err
 			}
-
-			if err := c.cfg.MarkLinkInactive(chanPoint); err != nil {
-				log.Errorf("unable to mark link inactive: %v", err)
-			}
-
 			return chanMachine.ForceClose()
 		},
 		MarkCommitmentBroadcasted: channel.MarkCommitmentBroadcasted,
-		MarkChannelClosed:         channel.CloseChannel,
-		IsPendingClose:            false,
-		ChainArbitratorConfig:     c.cfg,
-		ChainEvents:               chanEvents,
+		MarkChannelClosed: func(summary *channeldb.ChannelCloseSummary) error {
+			if err := channel.CloseChannel(summary); err != nil {
+				return err
+			}
+			c.cfg.NotifyClosedChannel(summary.ChanPoint)
+			return nil
+		},
+		IsPendingClose:        false,
+		ChainArbitratorConfig: c.cfg,
+		ChainEvents:           chanEvents,
 	}
 
 	// The final component needed is an arbitrator log that the arbitrator
@@ -353,6 +374,7 @@ func (c *ChainArbitrator) Start() error {
 				contractBreach: func(retInfo *lnwallet.BreachRetribution) error {
 					return c.cfg.ContractBreach(chanPoint, retInfo)
 				},
+				extractStateNumHint: lnwallet.GetStateNumHint,
 			},
 		)
 		if err != nil {
@@ -688,6 +710,7 @@ func (c *ChainArbitrator) WatchNewChannel(newChan *channeldb.OpenChannel) error 
 			contractBreach: func(retInfo *lnwallet.BreachRetribution) error {
 				return c.cfg.ContractBreach(chanPoint, retInfo)
 			},
+			extractStateNumHint: lnwallet.GetStateNumHint,
 		},
 	)
 	if err != nil {
@@ -719,13 +742,7 @@ func (c *ChainArbitrator) WatchNewChannel(newChan *channeldb.OpenChannel) error 
 // SubscribeChannelEvents returns a new active subscription for the set of
 // possible on-chain events for a particular channel. The struct can be used by
 // callers to be notified whenever an event that changes the state of the
-// channel on-chain occurs. If syncDispatch is true, then the sender of the
-// notification will wait until an error is sent over the ProcessACK before
-// modifying any database state. This allows callers to request a reliable hand
-// off.
-//
-// TODO(roasbeef): can be used later to provide RPC hook for all channel
-// lifetimes
+// channel on-chain occurs.
 func (c *ChainArbitrator) SubscribeChannelEvents(
 	chanPoint wire.OutPoint) (*ChainEventSubscription, error) {
 

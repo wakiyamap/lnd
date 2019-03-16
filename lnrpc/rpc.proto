@@ -359,6 +359,14 @@ service Lightning {
         };
     }
 
+    /** lncli: `subscribechannelevents`
+    SubscribeChannelEvents creates a uni-directional stream from the server to
+    the client in which any updates relevant to the state of the channels are
+    sent over. Events include new active channels, inactive channels, and closed
+    channels.
+    */
+    rpc SubscribeChannelEvents (ChannelEventSubscription) returns (stream ChannelEventUpdate);
+
     /** lncli: `closedchannels`
     ClosedChannels returns a description of all the closed channels that 
     this node was a participant in.
@@ -678,8 +686,8 @@ message Utxo {
     /// The value of the unspent coin in satoshis
     int64 amount_sat = 3 [json_name = "amount_sat"];
 
-    /// The scriptpubkey in hex
-    string script_pubkey = 4 [json_name = "script_pubkey"];
+    /// The pkscript in hex
+    string pk_script = 4 [json_name = "pk_script"];
 
     /// The outpoint in format txid:n
     OutPoint outpoint = 5 [json_name = "outpoint"];
@@ -766,6 +774,12 @@ message SendRequest {
     send the payment.
     */
     FeeLimit fee_limit = 8;
+
+    /**
+    The channel id of the channel that must be taken to the first hop. If zero,
+    any channel may be used.
+    */
+    uint64 outgoing_chan_id = 9;
 }
 message SendResponse {
     string payment_error = 1 [json_name = "payment_error"];
@@ -781,8 +795,16 @@ message SendToRouteRequest {
     /// An optional hex-encoded payment hash to be used for the HTLC.
     string payment_hash_string = 2;
 
-    /// The set of routes that should be used to attempt to complete the payment.
-    repeated Route routes = 3;
+    /**
+    Deprecated. The set of routes that should be used to attempt to complete the
+    payment. The possibility to pass in multiple routes is deprecated and 
+    instead the single route field below should be used in combination with the 
+    streaming variant of SendToRoute.
+    */
+    repeated Route routes = 3 [deprecated = true];
+
+    /// Route that should be used to attempt to complete the payment.
+    Route route = 4;
 }
 
 message ChannelPoint {
@@ -858,16 +880,15 @@ message SendCoinsResponse {
 }
 
 message ListUnspentRequest {
-	/// The minimum number of confirmations to be included.
-	int32 min_confs = 1;
+    /// The minimum number of confirmations to be included.
+    int32 min_confs = 1;
 
-	/// The maximum number of confirmations to be included.
-	int32 max_confs = 2;
+    /// The maximum number of confirmations to be included.
+    int32 max_confs = 2;
 }
 message ListUnspentResponse {
-	/// A list of utxos
-	repeated Utxo utxos = 1 [json_name = "utxos"];
-
+    /// A list of utxos
+    repeated Utxo utxos = 1 [json_name = "utxos"];
 }
 
 /** 
@@ -879,6 +900,8 @@ message ListUnspentResponse {
 enum AddressType {
         WITNESS_PUBKEY_HASH = 0;
         NESTED_PUBKEY_HASH = 1;
+        UNUSED_WITNESS_PUBKEY_HASH = 2;
+        UNUSED_NESTED_PUBKEY_HASH = 3;
 }
 
 message NewAddressRequest {
@@ -1020,7 +1043,7 @@ message Channel {
     /// Whether this channel is advertised to the network or not.
     bool private = 17 [json_name = "private"];
 
-    /// True if we were the ones that creted the channel.
+    /// True if we were the ones that created the channel.
     bool initiator = 18 [json_name = "initiator"];
 }
 
@@ -1393,6 +1416,27 @@ message PendingChannelsResponse {
     repeated WaitingCloseChannel waiting_close_channels = 5 [ json_name = "waiting_close_channels" ];
 }
 
+message ChannelEventSubscription {
+}
+
+message ChannelEventUpdate {
+    oneof channel {
+        Channel open_channel = 1 [ json_name = "open_channel" ];
+        ChannelCloseSummary closed_channel = 2 [ json_name = "closed_channel" ];
+        ChannelPoint active_channel = 3 [ json_name = "active_channel" ];
+        ChannelPoint inactive_channel = 4 [ json_name = "inactive_channel" ];
+    }
+
+    enum UpdateType {
+         OPEN_CHANNEL = 0;
+         CLOSED_CHANNEL = 1;
+         ACTIVE_CHANNEL = 2;
+         INACTIVE_CHANNEL = 3;
+    }
+
+    UpdateType type = 5 [ json_name = "type" ];
+}
+
 message WalletBalanceRequest {
 }
 message WalletBalanceResponse {
@@ -1423,8 +1467,11 @@ message QueryRoutesRequest {
     /// The amount to send expressed in satoshis
     int64 amt = 2;
 
-    /// The max number of routes to return.
-    int32 num_routes = 3;
+    /**
+    Deprecated. The max number of routes to return. In the future, QueryRoutes
+    will only return a single route.
+    */
+    int32 num_routes = 3 [deprecated = true]; 
 
     /// An optional CLTV delta from the current height that should be used for the timelock of the final hop
     int32 final_cltv_delta = 4;
@@ -1436,7 +1483,37 @@ message QueryRoutesRequest {
     send the payment.
     */
     FeeLimit fee_limit = 5;
+
+    /**
+    A list of nodes to ignore during path finding.
+    */
+    repeated bytes ignored_nodes = 6;
+
+    /**
+    A list of edges to ignore during path finding.
+    */
+    repeated EdgeLocator ignored_edges = 7;
+
+    /**
+    The source node where the request route should originated from. If empty,
+    self is assumed.
+    */
+    string source_pub_key = 8;
 }
+
+message EdgeLocator {
+    /// The short channel id of this edge.
+    uint64 channel_id = 1;
+
+    /**
+    The direction of this edge. If direction_reverse is false, the direction
+    of this edge is from the channel endpoint with the lexicographically smaller
+    pub key to the endpoint with the larger pub key. If direction_reverse is
+    is true, the edge goes the other way.
+    */
+    bool direction_reverse = 2;
+}
+
 message QueryRoutesResponse {
     repeated Route routes = 1 [json_name = "routes"];
 }
@@ -1555,6 +1632,7 @@ message RoutingPolicy {
     int64 fee_base_msat = 3 [json_name = "fee_base_msat"];
     int64 fee_rate_milli_msat = 4 [json_name = "fee_rate_milli_msat"];
     bool disabled = 5 [json_name = "disabled"];
+    uint64 max_htlc_msat = 6 [json_name = "max_htlc_msat"];
 }
 
 /**
@@ -1813,6 +1891,8 @@ message Invoice {
     enum InvoiceState {
         OPEN = 0;
         SETTLED = 1;
+        CANCELED = 2;
+        ACCEPTED = 3;
     }
 
     /**

@@ -6,13 +6,18 @@ import (
 
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/wakiyamap/lnd/autopilot"
+	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/htlcswitch"
 	"github.com/wakiyamap/lnd/invoices"
 	"github.com/wakiyamap/lnd/lnrpc/autopilotrpc"
 	"github.com/wakiyamap/lnd/lnrpc/chainrpc"
 	"github.com/wakiyamap/lnd/lnrpc/invoicesrpc"
+	"github.com/wakiyamap/lnd/lnrpc/routerrpc"
 	"github.com/wakiyamap/lnd/lnrpc/signrpc"
 	"github.com/wakiyamap/lnd/lnrpc/walletrpc"
 	"github.com/wakiyamap/lnd/macaroons"
+	"github.com/wakiyamap/lnd/netann"
+	"github.com/wakiyamap/lnd/routing"
 )
 
 // subRPCServerConfigs is special sub-config in the main configuration that
@@ -44,6 +49,12 @@ type subRPCServerConfigs struct {
 	// InvoicesRPC is a sub-RPC server that exposes invoice related methods
 	// as a gRPC service.
 	InvoicesRPC *invoicesrpc.Config `group:"invoicesrpc" namespace:"invoicesrpc"`
+
+	// RouterRPC is a sub-RPC server the exposes functionality that allows
+	// clients to send payments on the network, and perform Lightning
+	// payment related queries such as requests for estimates of off-chain
+	// fees.
+	RouterRPC *routerrpc.Config `group:"routerrpc" namespace:"routerrpc"`
 }
 
 // PopulateDependencies attempts to iterate through all the sub-server configs
@@ -56,7 +67,11 @@ func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 	networkDir string, macService *macaroons.Service,
 	atpl *autopilot.Manager,
 	invoiceRegistry *invoices.InvoiceRegistry,
-	activeNetParams *chaincfg.Params) error {
+	htlcSwitch *htlcswitch.Switch,
+	activeNetParams *chaincfg.Params,
+	chanRouter *routing.ChannelRouter,
+	nodeSigner *netann.NodeSigner,
+	chanDB *channeldb.DB) error {
 
 	// First, we'll use reflect to obtain a version of the config struct
 	// that allows us to programmatically inspect its fields.
@@ -81,9 +96,9 @@ func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 			continue
 		}
 
-		switch cfg := field.Interface().(type) {
+		switch subCfg := field.Interface().(type) {
 		case *signrpc.Config:
-			subCfgValue := extractReflectValue(cfg)
+			subCfgValue := extractReflectValue(subCfg)
 
 			subCfgValue.FieldByName("MacService").Set(
 				reflect.ValueOf(macService),
@@ -96,7 +111,7 @@ func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 			)
 
 		case *walletrpc.Config:
-			subCfgValue := extractReflectValue(cfg)
+			subCfgValue := extractReflectValue(subCfg)
 
 			subCfgValue.FieldByName("NetworkDir").Set(
 				reflect.ValueOf(networkDir),
@@ -115,14 +130,14 @@ func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 			)
 
 		case *autopilotrpc.Config:
-			subCfgValue := extractReflectValue(cfg)
+			subCfgValue := extractReflectValue(subCfg)
 
 			subCfgValue.FieldByName("Manager").Set(
 				reflect.ValueOf(atpl),
 			)
 
 		case *chainrpc.Config:
-			subCfgValue := extractReflectValue(cfg)
+			subCfgValue := extractReflectValue(subCfg)
 
 			subCfgValue.FieldByName("NetworkDir").Set(
 				reflect.ValueOf(networkDir),
@@ -135,7 +150,7 @@ func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 			)
 
 		case *invoicesrpc.Config:
-			subCfgValue := extractReflectValue(cfg)
+			subCfgValue := extractReflectValue(subCfg)
 
 			subCfgValue.FieldByName("NetworkDir").Set(
 				reflect.ValueOf(networkDir),
@@ -146,8 +161,43 @@ func (s *subRPCServerConfigs) PopulateDependencies(cc *chainControl,
 			subCfgValue.FieldByName("InvoiceRegistry").Set(
 				reflect.ValueOf(invoiceRegistry),
 			)
+			subCfgValue.FieldByName("IsChannelActive").Set(
+				reflect.ValueOf(htlcSwitch.HasActiveLink),
+			)
 			subCfgValue.FieldByName("ChainParams").Set(
 				reflect.ValueOf(activeNetParams),
+			)
+			subCfgValue.FieldByName("NodeSigner").Set(
+				reflect.ValueOf(nodeSigner),
+			)
+			subCfgValue.FieldByName("MaxPaymentMSat").Set(
+				reflect.ValueOf(maxPaymentMSat),
+			)
+			defaultDelta := cfg.Bitcoin.TimeLockDelta
+			if registeredChains.PrimaryChain() == monacoinChain {
+				defaultDelta = cfg.Monacoin.TimeLockDelta
+			}
+			subCfgValue.FieldByName("DefaultCLTVExpiry").Set(
+				reflect.ValueOf(defaultDelta),
+			)
+			subCfgValue.FieldByName("ChanDB").Set(
+				reflect.ValueOf(chanDB),
+			)
+
+		case *routerrpc.Config:
+			subCfgValue := extractReflectValue(cfg)
+
+			subCfgValue.FieldByName("NetworkDir").Set(
+				reflect.ValueOf(networkDir),
+			)
+			subCfgValue.FieldByName("ActiveNetParams").Set(
+				reflect.ValueOf(activeNetParams),
+			)
+			subCfgValue.FieldByName("MacService").Set(
+				reflect.ValueOf(macService),
+			)
+			subCfgValue.FieldByName("Router").Set(
+				reflect.ValueOf(chanRouter),
 			)
 
 		default:

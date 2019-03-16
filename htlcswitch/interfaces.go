@@ -1,7 +1,9 @@
 package htlcswitch
 
 import (
+	"github.com/btcsuite/btcd/wire"
 	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/invoices"
 	"github.com/wakiyamap/lnd/lnpeer"
 	"github.com/wakiyamap/lnd/lntypes"
 	"github.com/wakiyamap/lnd/lnwire"
@@ -16,9 +18,23 @@ type InvoiceDatabase interface {
 	// extended to us gives us enough time to settle as we prescribe.
 	LookupInvoice(lntypes.Hash) (channeldb.Invoice, uint32, error)
 
-	// SettleInvoice attempts to mark an invoice corresponding to the
-	// passed payment hash as fully settled.
-	SettleInvoice(payHash lntypes.Hash, paidAmount lnwire.MilliSatoshi) error
+	// NotifyExitHopHtlc attempts to mark an invoice as settled. If the
+	// invoice is a debug invoice, then this method is a noop as debug
+	// invoices are never fully settled. The return value describes how the
+	// htlc should be resolved. If the htlc cannot be resolved immediately,
+	// the resolution is sent on the passed in hodlChan later.
+	NotifyExitHopHtlc(payHash lntypes.Hash, paidAmount lnwire.MilliSatoshi,
+		hodlChan chan<- interface{}) (*invoices.HodlEvent, error)
+
+	// CancelInvoice attempts to cancel the invoice corresponding to the
+	// passed payment hash.
+	CancelInvoice(payHash lntypes.Hash) error
+
+	// SettleHodlInvoice settles a hold invoice.
+	SettleHodlInvoice(preimage lntypes.Preimage) error
+
+	// HodlUnsubscribeAll unsubscribes from all hodl events.
+	HodlUnsubscribeAll(subscriber chan<- interface{})
 }
 
 // ChannelLink is an interface which represents the subsystem for managing the
@@ -57,6 +73,9 @@ type ChannelLink interface {
 	// NOTE: This function MUST be non-blocking (or block as little as
 	// possible).
 	HandleChannelUpdate(lnwire.Message)
+
+	// ChannelPoint returns the channel outpoint for the channel link.
+	ChannelPoint() *wire.OutPoint
 
 	// ChanID returns the channel ID for the channel link. The channel ID
 	// is a more compact representation of a channel's full outpoint.

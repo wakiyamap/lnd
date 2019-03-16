@@ -1847,7 +1847,7 @@ func TestLocalPaymentNoForwardingEvents(t *testing.T) {
 	// proceeding.
 	receiver := n.bobServer
 	firstHop := n.firstBobChannelLink.ShortChanID()
-	_, err = n.makePayment(
+	_, err = makePayment(
 		n.aliceServer, receiver, firstHop, hops, amount, htlcAmt,
 		totalTimelock,
 	).Wait(30 * time.Second)
@@ -1908,7 +1908,7 @@ func TestMultiHopPaymentForwardingEvents(t *testing.T) {
 	)
 	firstHop := n.firstBobChannelLink.ShortChanID()
 	for i := 0; i < numPayments/2; i++ {
-		_, err := n.makePayment(
+		_, err := makePayment(
 			n.aliceServer, n.carolServer, firstHop, hops, finalAmt,
 			htlcAmt, totalTimelock,
 		).Wait(30 * time.Second)
@@ -1924,7 +1924,7 @@ func TestMultiHopPaymentForwardingEvents(t *testing.T) {
 
 	// After sending 5 of the payments, trigger the forwarding ticker, to
 	// make sure the events are properly flushed.
-	bobTicker, ok := n.bobServer.htlcSwitch.cfg.FwdEventTicker.(*ticker.Mock)
+	bobTicker, ok := n.bobServer.htlcSwitch.cfg.FwdEventTicker.(*ticker.Force)
 	if !ok {
 		t.Fatalf("mockTicker assertion failed")
 	}
@@ -1961,7 +1961,7 @@ func TestMultiHopPaymentForwardingEvents(t *testing.T) {
 
 	// Send the remaining payments.
 	for i := numPayments / 2; i < numPayments; i++ {
-		_, err := n.makePayment(
+		_, err := makePayment(
 			n.aliceServer, n.carolServer, firstHop, hops, finalAmt,
 			htlcAmt, totalTimelock,
 		).Wait(30 * time.Second)

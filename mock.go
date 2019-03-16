@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -16,6 +15,7 @@ import (
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/input"
 	"github.com/wakiyamap/lnd/keychain"
+	"github.com/wakiyamap/lnd/lntypes"
 	"github.com/wakiyamap/lnd/lnwallet"
 )
 
@@ -226,6 +226,11 @@ func (m *mockWalletController) NewAddress(addrType lnwallet.AddressType,
 		m.rootKey.PubKey().SerializeCompressed(), &chaincfg.MainNetParams)
 	return addr, nil
 }
+func (*mockWalletController) LastUnusedAddress(addrType lnwallet.AddressType) (
+	btcutil.Address, error) {
+	return nil, nil
+}
+
 func (*mockWalletController) IsOurAddress(a btcutil.Address) bool {
 	return false
 }
@@ -303,25 +308,30 @@ func (m *mockSecretKeyRing) ScalarMult(keyDesc keychain.KeyDescriptor,
 
 type mockPreimageCache struct {
 	sync.Mutex
-	preimageMap map[[32]byte][]byte
+	preimageMap map[lntypes.Hash]lntypes.Preimage
 }
 
-func (m *mockPreimageCache) LookupPreimage(hash []byte) ([]byte, bool) {
+func newMockPreimageCache() *mockPreimageCache {
+	return &mockPreimageCache{
+		preimageMap: make(map[lntypes.Hash]lntypes.Preimage),
+	}
+}
+
+func (m *mockPreimageCache) LookupPreimage(hash lntypes.Hash) (lntypes.Preimage, bool) {
 	m.Lock()
 	defer m.Unlock()
 
-	var h [32]byte
-	copy(h[:], hash)
-
-	p, ok := m.preimageMap[h]
+	p, ok := m.preimageMap[hash]
 	return p, ok
 }
 
-func (m *mockPreimageCache) AddPreimage(preimage []byte) error {
+func (m *mockPreimageCache) AddPreimages(preimages ...lntypes.Preimage) error {
 	m.Lock()
 	defer m.Unlock()
 
-	m.preimageMap[sha256.Sum256(preimage[:])] = preimage
+	for _, preimage := range preimages {
+		m.preimageMap[preimage.Hash()] = preimage
+	}
 
 	return nil
 }

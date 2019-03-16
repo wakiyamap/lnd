@@ -9,6 +9,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
+	"github.com/wakiyamap/lnd/lntypes"
 )
 
 // AddressType is an enum-like type which denotes the possible address types
@@ -149,6 +150,14 @@ type WalletController interface {
 	// p2wsh, etc.
 	NewAddress(addrType AddressType, change bool) (btcutil.Address, error)
 
+	// LastUnusedAddress returns the last *unused* address known by the
+	// wallet. An address is unused if it hasn't received any payments.
+	// This can be useful in UIs in order to continually show the
+	// "freshest" address without having to worry about "address inflation"
+	// caused by continual refreshing. Similar to NewAddress it can derive
+	// a specified address type. By default, this is a non-change address.
+	LastUnusedAddress(addrType AddressType) (btcutil.Address, error)
+
 	// IsOurAddress checks if the passed address belongs to this wallet
 	IsOurAddress(a btcutil.Address) bool
 
@@ -272,11 +281,12 @@ type PreimageCache interface {
 	// LookupPreimage attempts to look up a preimage according to its hash.
 	// If found, the preimage is returned along with true for the second
 	// argument. Otherwise, it'll return false.
-	LookupPreimage(hash []byte) ([]byte, bool)
+	LookupPreimage(hash lntypes.Hash) (lntypes.Preimage, bool)
 
-	// AddPreimage attempts to add a new preimage to the global cache. If
-	// successful a nil error will be returned.
-	AddPreimage(preimage []byte) error
+	// AddPreimages adds a batch of newly discovered preimages to the global
+	// cache, and also signals any subscribers of the newly discovered
+	// witness.
+	AddPreimages(preimages ...lntypes.Preimage) error
 }
 
 // WalletDriver represents a "driver" for a particular concrete

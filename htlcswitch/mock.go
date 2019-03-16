@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,11 +19,12 @@ import (
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/go-errors/errors"
-	"github.com/wakiyamap/lightning-onion"
+	sphinx "github.com/wakiyamap/lightning-onion"
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/contractcourt"
 	"github.com/wakiyamap/lnd/input"
+	"github.com/wakiyamap/lnd/invoices"
 	"github.com/wakiyamap/lnd/lnpeer"
 	"github.com/wakiyamap/lnd/lntypes"
 	"github.com/wakiyamap/lnd/lnwallet"
@@ -32,25 +34,32 @@ import (
 
 type mockPreimageCache struct {
 	sync.Mutex
-	preimageMap map[[32]byte][]byte
+	preimageMap map[lntypes.Hash]lntypes.Preimage
 }
 
-func (m *mockPreimageCache) LookupPreimage(hash []byte) ([]byte, bool) {
+func newMockPreimageCache() *mockPreimageCache {
+	return &mockPreimageCache{
+		preimageMap: make(map[lntypes.Hash]lntypes.Preimage),
+	}
+}
+
+func (m *mockPreimageCache) LookupPreimage(
+	hash lntypes.Hash) (lntypes.Preimage, bool) {
+
 	m.Lock()
 	defer m.Unlock()
 
-	var h [32]byte
-	copy(h[:], hash)
-
-	p, ok := m.preimageMap[h]
+	p, ok := m.preimageMap[hash]
 	return p, ok
 }
 
-func (m *mockPreimageCache) AddPreimage(preimage []byte) error {
+func (m *mockPreimageCache) AddPreimages(preimages ...lntypes.Preimage) error {
 	m.Lock()
 	defer m.Unlock()
 
-	m.preimageMap[sha256.Sum256(preimage[:])] = preimage
+	for _, preimage := range preimages {
+		m.preimageMap[preimage.Hash()] = preimage
+	}
 
 	return nil
 }
@@ -124,6 +133,7 @@ type mockServer struct {
 	htlcSwitch *Switch
 
 	registry         *mockInvoiceRegistry
+	pCache           *mockPreimageCache
 	interceptorFuncs []messageInterceptor
 }
 
@@ -162,9 +172,11 @@ func initSwitchWithDB(startingHeight uint32, db *channeldb.DB) (*Switch, error) 
 		FetchLastChannelUpdate: func(lnwire.ShortChannelID) (*lnwire.ChannelUpdate, error) {
 			return nil, nil
 		},
-		Notifier:       &mockNotifier{},
-		FwdEventTicker: ticker.MockNew(DefaultFwdEventInterval),
-		LogEventTicker: ticker.MockNew(DefaultLogInterval),
+		Notifier:              &mockNotifier{},
+		FwdEventTicker:        ticker.NewForce(DefaultFwdEventInterval),
+		LogEventTicker:        ticker.NewForce(DefaultLogInterval),
+		NotifyActiveChannel:   func(wire.OutPoint) {},
+		NotifyInactiveChannel: func(wire.OutPoint) {},
 	}
 
 	return New(cfg, startingHeight)
@@ -177,10 +189,14 @@ func newMockServer(t testing.TB, name string, startingHeight uint32,
 	h := sha256.Sum256([]byte(name))
 	copy(id[:], h[:])
 
+	pCache := newMockPreimageCache()
+
 	htlcSwitch, err := initSwitchWithDB(startingHeight, db)
 	if err != nil {
 		return nil, err
 	}
+
+	registry := newMockRegistry(defaultDelta)
 
 	return &mockServer{
 		t:                t,
@@ -188,8 +204,9 @@ func newMockServer(t testing.TB, name string, startingHeight uint32,
 		name:             name,
 		messages:         make(chan lnwire.Message, 3000),
 		quit:             make(chan struct{}),
-		registry:         newMockRegistry(defaultDelta),
+		registry:         registry,
 		htlcSwitch:       htlcSwitch,
+		pCache:           pCache,
 		interceptorFuncs: make([]messageInterceptor, 0),
 	}, nil
 }
@@ -493,6 +510,10 @@ func (s *mockServer) SendMessage(sync bool, msgs ...lnwire.Message) error {
 	return nil
 }
 
+func (s *mockServer) SendMessageLazy(sync bool, msgs ...lnwire.Message) error {
+	panic("not implemented")
+}
+
 func (s *mockServer) readHandler(message lnwire.Message) error {
 	var targetChan lnwire.ChannelID
 
@@ -673,6 +694,7 @@ func (f *mockChannelLink) ChanID() lnwire.ChannelID                     { return
 func (f *mockChannelLink) ShortChanID() lnwire.ShortChannelID           { return f.shortChanID }
 func (f *mockChannelLink) Bandwidth() lnwire.MilliSatoshi               { return 99999999 }
 func (f *mockChannelLink) Peer() lnpeer.Peer                            { return f.peer }
+func (f *mockChannelLink) ChannelPoint() *wire.OutPoint                 { return &wire.OutPoint{} }
 func (f *mockChannelLink) Stop()                                        {}
 func (f *mockChannelLink) EligibleToForward() bool                      { return f.eligible }
 func (f *mockChannelLink) setLiveShortChanID(sid lnwire.ShortChannelID) { f.shortChanID = sid }
@@ -683,63 +705,92 @@ func (f *mockChannelLink) UpdateShortChanID() (lnwire.ShortChannelID, error) {
 
 var _ ChannelLink = (*mockChannelLink)(nil)
 
-type mockInvoiceRegistry struct {
-	sync.Mutex
+func newDB() (*channeldb.DB, func(), error) {
+	// First, create a temporary directory to be used for the duration of
+	// this test.
+	tempDirName, err := ioutil.TempDir("", "channeldb")
+	if err != nil {
+		return nil, nil, err
+	}
 
-	invoices   map[lntypes.Hash]channeldb.Invoice
-	finalDelta uint32
+	// Next, create channeldb for the first time.
+	cdb, err := channeldb.Open(tempDirName)
+	if err != nil {
+		os.RemoveAll(tempDirName)
+		return nil, nil, err
+	}
+
+	cleanUp := func() {
+		cdb.Close()
+		os.RemoveAll(tempDirName)
+	}
+
+	return cdb, cleanUp, nil
+}
+
+type mockInvoiceRegistry struct {
+	settleChan chan lntypes.Hash
+
+	registry *invoices.InvoiceRegistry
+
+	cleanup func()
 }
 
 func newMockRegistry(minDelta uint32) *mockInvoiceRegistry {
+	cdb, cleanup, err := newDB()
+	if err != nil {
+		panic(err)
+	}
+
+	decodeExpiry := func(invoice string) (uint32, error) {
+		return 3, nil
+	}
+
+	registry := invoices.NewRegistry(cdb, decodeExpiry)
+	registry.Start()
+
 	return &mockInvoiceRegistry{
-		finalDelta: minDelta,
-		invoices:   make(map[lntypes.Hash]channeldb.Invoice),
+		registry: registry,
+		cleanup:  cleanup,
 	}
 }
 
 func (i *mockInvoiceRegistry) LookupInvoice(rHash lntypes.Hash) (channeldb.Invoice, uint32, error) {
-	i.Lock()
-	defer i.Unlock()
-
-	invoice, ok := i.invoices[rHash]
-	if !ok {
-		return channeldb.Invoice{}, 0, fmt.Errorf("can't find mock "+
-			"invoice: %x", rHash[:])
-	}
-
-	return invoice, i.finalDelta, nil
+	return i.registry.LookupInvoice(rHash)
 }
 
-func (i *mockInvoiceRegistry) SettleInvoice(rhash lntypes.Hash,
-	amt lnwire.MilliSatoshi) error {
-
-	i.Lock()
-	defer i.Unlock()
-
-	invoice, ok := i.invoices[rhash]
-	if !ok {
-		return fmt.Errorf("can't find mock invoice: %x", rhash[:])
-	}
-
-	if invoice.Terms.State == channeldb.ContractSettled {
-		return nil
-	}
-
-	invoice.Terms.State = channeldb.ContractSettled
-	invoice.AmtPaid = amt
-	i.invoices[rhash] = invoice
-
-	return nil
+func (i *mockInvoiceRegistry) SettleHodlInvoice(preimage lntypes.Preimage) error {
+	return i.registry.SettleHodlInvoice(preimage)
 }
 
-func (i *mockInvoiceRegistry) AddInvoice(invoice channeldb.Invoice) error {
-	i.Lock()
-	defer i.Unlock()
+func (i *mockInvoiceRegistry) NotifyExitHopHtlc(rhash lntypes.Hash,
+	amt lnwire.MilliSatoshi, hodlChan chan<- interface{}) (
+	*invoices.HodlEvent, error) {
 
-	rhash := invoice.Terms.PaymentPreimage.Hash()
-	i.invoices[rhash] = invoice
+	event, err := i.registry.NotifyExitHopHtlc(rhash, amt, hodlChan)
+	if err != nil {
+		return nil, err
+	}
+	if i.settleChan != nil {
+		i.settleChan <- rhash
+	}
 
-	return nil
+	return event, nil
+}
+
+func (i *mockInvoiceRegistry) CancelInvoice(payHash lntypes.Hash) error {
+	return i.registry.CancelInvoice(payHash)
+}
+
+func (i *mockInvoiceRegistry) AddInvoice(invoice channeldb.Invoice,
+	paymentHash lntypes.Hash) error {
+
+	_, err := i.registry.AddInvoice(&invoice, paymentHash)
+	return err
+}
+
+func (i *mockInvoiceRegistry) HodlUnsubscribeAll(subscriber chan<- interface{}) {
+	i.registry.HodlUnsubscribeAll(subscriber)
 }
 
 var _ InvoiceDatabase = (*mockInvoiceRegistry)(nil)
