@@ -1,4 +1,4 @@
-package main
+package lnd
 
 import (
 	"bytes"
@@ -15,6 +15,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
+	"github.com/lightningnetwork/lnd/ticker"
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/contractcourt"
@@ -25,7 +26,6 @@ import (
 	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/wakiyamap/lnd/netann"
 	"github.com/wakiyamap/lnd/shachain"
-	"github.com/wakiyamap/lnd/ticker"
 )
 
 var (
@@ -390,6 +390,9 @@ func createTestPeer(notifier chainntnfs.ChainNotifier,
 		ApplyChannelUpdate:       func(*lnwire.ChannelUpdate) error { return nil },
 	})
 	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err = chanStatusMgr.Start(); err != nil {
 		return nil, nil, nil, nil, err
 	}
 	s.chanStatusMgr = chanStatusMgr

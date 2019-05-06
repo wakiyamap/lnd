@@ -1,6 +1,6 @@
 // +build !rpctest
 
-package main
+package lnd
 
 import (
 	"errors"
@@ -23,6 +23,7 @@ import (
 
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/channeldb"
+	"github.com/wakiyamap/lnd/discovery"
 	"github.com/wakiyamap/lnd/htlcswitch"
 	"github.com/wakiyamap/lnd/input"
 	"github.com/wakiyamap/lnd/keychain"
@@ -288,7 +289,9 @@ func createTestFundingManager(t *testing.T, privKey *btcec.PrivateKey,
 		SignMessage: func(pubKey *btcec.PublicKey, msg []byte) (*btcec.Signature, error) {
 			return testSig, nil
 		},
-		SendAnnouncement: func(msg lnwire.Message) chan error {
+		SendAnnouncement: func(msg lnwire.Message,
+			_ ...discovery.OptionalMsgField) chan error {
+
 			errChan := make(chan error, 1)
 			select {
 			case sentAnnouncements <- msg:
@@ -413,7 +416,9 @@ func recreateAliceFundingManager(t *testing.T, alice *testNode) {
 			msg []byte) (*btcec.Signature, error) {
 			return testSig, nil
 		},
-		SendAnnouncement: func(msg lnwire.Message) chan error {
+		SendAnnouncement: func(msg lnwire.Message,
+			_ ...discovery.OptionalMsgField) chan error {
+
 			errChan := make(chan error, 1)
 			select {
 			case aliceAnnounceChan <- msg:
@@ -1168,13 +1173,13 @@ func TestFundingManagerRestartBehavior(t *testing.T) {
 	recreateAliceFundingManager(t, alice)
 
 	// Intentionally make the channel announcements fail
-	alice.fundingMgr.cfg.SendAnnouncement =
-		func(msg lnwire.Message) chan error {
-			errChan := make(chan error, 1)
-			errChan <- fmt.Errorf("intentional error in " +
-				"SendAnnouncement")
-			return errChan
-		}
+	alice.fundingMgr.cfg.SendAnnouncement = func(msg lnwire.Message,
+		_ ...discovery.OptionalMsgField) chan error {
+
+		errChan := make(chan error, 1)
+		errChan <- fmt.Errorf("intentional error in SendAnnouncement")
+		return errChan
+	}
 
 	fundingLockedAlice := assertFundingMsgSent(
 		t, alice.msgChan, "FundingLocked",

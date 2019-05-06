@@ -1,4 +1,4 @@
-package main
+package lnd
 
 import (
 	"fmt"
@@ -10,10 +10,11 @@ import (
 	"github.com/btcsuite/btclog"
 	"github.com/jrick/logrotate/rotator"
 	"github.com/lightninglabs/neutrino"
-	"github.com/wakiyamap/lightning-onion"
+	sphinx "github.com/lightningnetwork/lightning-onion"
 	"github.com/wakiyamap/lnd/autopilot"
 	"github.com/wakiyamap/lnd/build"
 	"github.com/wakiyamap/lnd/chainntnfs"
+	"github.com/wakiyamap/lnd/chanbackup"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/channelnotifier"
 	"github.com/wakiyamap/lnd/contractcourt"
@@ -23,6 +24,7 @@ import (
 	"github.com/wakiyamap/lnd/lnrpc/autopilotrpc"
 	"github.com/wakiyamap/lnd/lnrpc/chainrpc"
 	"github.com/wakiyamap/lnd/lnrpc/invoicesrpc"
+	"github.com/wakiyamap/lnd/lnrpc/routerrpc"
 	"github.com/wakiyamap/lnd/lnrpc/signrpc"
 	"github.com/wakiyamap/lnd/lnrpc/walletrpc"
 	"github.com/wakiyamap/lnd/lnwallet"
@@ -82,6 +84,7 @@ var (
 	ntfrLog = build.NewSubLogger("NTFR", backendLog.Logger)
 	irpcLog = build.NewSubLogger("IRPC", backendLog.Logger)
 	chnfLog = build.NewSubLogger("CHNF", backendLog.Logger)
+	chbuLog = build.NewSubLogger("CHBU", backendLog.Logger)
 )
 
 // Initialize package-global logger variables.
@@ -108,6 +111,17 @@ func init() {
 	chainrpc.UseLogger(ntfrLog)
 	invoicesrpc.UseLogger(irpcLog)
 	channelnotifier.UseLogger(chnfLog)
+	chanbackup.UseLogger(chbuLog)
+
+	addSubLogger(routerrpc.Subsystem, routerrpc.UseLogger)
+}
+
+// addSubLogger is a helper method to conveniently register the logger of a sub
+// system.
+func addSubLogger(subsystem string, useLogger func(btclog.Logger)) {
+	logger := build.NewSubLogger(subsystem, backendLog.Logger)
+	useLogger(logger)
+	subsystemLoggers[subsystem] = logger
 }
 
 // subsystemLoggers maps each subsystem identifier to its associated logger.
@@ -140,6 +154,7 @@ var subsystemLoggers = map[string]btclog.Logger{
 	"NTFR": ntfnLog,
 	"IRPC": irpcLog,
 	"CHNF": chnfLog,
+	"CHBU": chbuLog,
 }
 
 // initLogRotator initializes the logging rotator to write logs to logFile and

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wakiyamap/lnd/ticker"
+	"github.com/lightningnetwork/lnd/ticker"
 )
 
 const interval = 50 * time.Millisecond

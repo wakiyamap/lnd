@@ -16,8 +16,8 @@ import (
 	"github.com/btcsuite/btcd/rpcclient"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
+	"github.com/lightningnetwork/lnd/queue"
 	"github.com/wakiyamap/lnd/chainntnfs"
-	"github.com/wakiyamap/lnd/queue"
 )
 
 const (

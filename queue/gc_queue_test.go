@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wakiyamap/lnd/queue"
+	"github.com/lightningnetwork/lnd/queue"
 )
 
 // testItem is an item type we'll be using to test the GCQueue.

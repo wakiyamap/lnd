@@ -22,6 +22,7 @@ import (
 	"github.com/btcsuite/fastsha256"
 	"github.com/coreos/bbolt"
 	"github.com/go-errors/errors"
+	"github.com/lightningnetwork/lnd/ticker"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/contractcourt"
 	"github.com/wakiyamap/lnd/input"
@@ -31,7 +32,6 @@ import (
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/wakiyamap/lnd/shachain"
-	"github.com/wakiyamap/lnd/ticker"
 )
 
 var (
@@ -527,6 +527,12 @@ func generatePaymentWithPreimage(invoiceAmt, htlcAmt lnwire.MilliSatoshi,
 	preimage, rhash [32]byte) (*channeldb.Invoice, *lnwire.UpdateAddHTLC,
 	error) {
 
+	// Create the db invoice. Normally the payment requests needs to be set,
+	// because it is decoded in InvoiceRegistry to obtain the cltv expiry.
+	// But because the mock registry used in tests is mocking the decode
+	// step and always returning the value of testInvoiceCltvExpiry, we
+	// don't need to bother here with creating and signing a payment
+	// request.
 	invoice := &channeldb.Invoice{
 		CreationDate: time.Now(),
 		Terms: channeldb.ContractTerm{
@@ -583,15 +589,18 @@ func generateRoute(hops ...ForwardingInfo) ([lnwire.OnionPacketSize]byte, error)
 
 // threeHopNetwork is used for managing the created cluster of 3 hops.
 type threeHopNetwork struct {
-	aliceServer      *mockServer
-	aliceChannelLink *channelLink
+	aliceServer       *mockServer
+	aliceChannelLink  *channelLink
+	aliceOnionDecoder *mockIteratorDecoder
 
 	bobServer            *mockServer
 	firstBobChannelLink  *channelLink
 	secondBobChannelLink *channelLink
+	bobOnionDecoder      *mockIteratorDecoder
 
-	carolServer      *mockServer
-	carolChannelLink *channelLink
+	carolServer       *mockServer
+	carolChannelLink  *channelLink
+	carolOnionDecoder *mockIteratorDecoder
 
 	hopNetwork
 }
@@ -601,8 +610,6 @@ type threeHopNetwork struct {
 // the specified path.
 func generateHops(payAmt lnwire.MilliSatoshi, startingHeight uint32,
 	path ...*channelLink) (lnwire.MilliSatoshi, uint32, []ForwardingInfo) {
-
-	lastHop := path[len(path)-1]
 
 	totalTimelock := startingHeight
 	runningAmt := payAmt
@@ -620,7 +627,7 @@ func generateHops(payAmt lnwire.MilliSatoshi, startingHeight uint32,
 		// If this is the last, hop, then the time lock will be their
 		// specified delta policy plus our starting height.
 		if i == len(path)-1 {
-			totalTimelock += lastHop.cfg.FwrdingPolicy.TimeLockDelta
+			totalTimelock += testInvoiceCltvExpiry
 			timeLock = totalTimelock
 		} else {
 			// Otherwise, the outgoing time lock should be the
@@ -944,15 +951,18 @@ func newThreeHopNetwork(t testing.TB, aliceChannel, firstBobChannel,
 	}
 
 	return &threeHopNetwork{
-		aliceServer:      aliceServer,
-		aliceChannelLink: aliceChannelLink.(*channelLink),
+		aliceServer:       aliceServer,
+		aliceChannelLink:  aliceChannelLink.(*channelLink),
+		aliceOnionDecoder: aliceDecoder,
 
 		bobServer:            bobServer,
 		firstBobChannelLink:  firstBobChannelLink.(*channelLink),
 		secondBobChannelLink: secondBobChannelLink.(*channelLink),
+		bobOnionDecoder:      bobDecoder,
 
-		carolServer:      carolServer,
-		carolChannelLink: carolChannelLink.(*channelLink),
+		carolServer:       carolServer,
+		carolChannelLink:  carolChannelLink.(*channelLink),
+		carolOnionDecoder: carolDecoder,
 
 		hopNetwork: *hopNetwork,
 	}
@@ -1040,14 +1050,16 @@ func (h *hopNetwork) createChannelLink(server, peer *mockServer,
 			UpdateContractSignals: func(*contractcourt.ContractSignals) error {
 				return nil
 			},
-			ChainEvents:         &contractcourt.ChainEventSubscription{},
-			SyncStates:          true,
-			BatchSize:           10,
-			BatchTicker:         ticker.NewForce(batchTimeout),
-			FwdPkgGCTicker:      ticker.NewForce(fwdPkgTimeout),
-			MinFeeUpdateTimeout: minFeeUpdateTimeout,
-			MaxFeeUpdateTimeout: maxFeeUpdateTimeout,
-			OnChannelFailure:    func(lnwire.ChannelID, lnwire.ShortChannelID, LinkFailureError) {},
+			ChainEvents:             &contractcourt.ChainEventSubscription{},
+			SyncStates:              true,
+			BatchSize:               10,
+			BatchTicker:             ticker.NewForce(batchTimeout),
+			FwdPkgGCTicker:          ticker.NewForce(fwdPkgTimeout),
+			MinFeeUpdateTimeout:     minFeeUpdateTimeout,
+			MaxFeeUpdateTimeout:     maxFeeUpdateTimeout,
+			OnChannelFailure:        func(lnwire.ChannelID, lnwire.ShortChannelID, LinkFailureError) {},
+			FinalCltvRejectDelta:    5,
+			OutgoingCltvRejectDelta: 3,
 		},
 		channel,
 	)

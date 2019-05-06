@@ -1,4 +1,4 @@
-package main
+package lnd
 
 import (
 	"bytes"
@@ -17,6 +17,7 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	"github.com/davecgh/go-spew/spew"
 
+	"github.com/lightningnetwork/lnd/ticker"
 	"github.com/wakiyamap/lnd/brontide"
 	"github.com/wakiyamap/lnd/buffer"
 	"github.com/wakiyamap/lnd/chainntnfs"
@@ -27,14 +28,10 @@ import (
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
 	"github.com/wakiyamap/lnd/pool"
-	"github.com/wakiyamap/lnd/ticker"
 )
 
 var (
 	numNodes int32
-
-	// ErrPeerExiting signals that the peer received a disconnect request.
-	ErrPeerExiting = fmt.Errorf("peer exiting")
 )
 
 const (
@@ -45,7 +42,7 @@ const (
 	idleTimeout = 5 * time.Minute
 
 	// writeMessageTimeout is the timeout used when writing a message to peer.
-	writeMessageTimeout = 50 * time.Second
+	writeMessageTimeout = 5 * time.Second
 
 	// readMessageTimeout is the timeout used when reading a message from a
 	// peer.
@@ -199,6 +196,14 @@ type peer struct {
 	// remote node.
 	localFeatures *lnwire.RawFeatureVector
 
+	// finalCltvRejectDelta defines the number of blocks before the expiry
+	// of the htlc where we no longer settle it as an exit hop.
+	finalCltvRejectDelta uint32
+
+	// outgoingCltvRejectDelta defines the number of blocks before expiry of
+	// an htlc where we don't offer an htlc anymore.
+	outgoingCltvRejectDelta uint32
+
 	// remoteLocalFeatures is the local feature vector received from the
 	// peer during the connection handshake.
 	remoteLocalFeatures *lnwire.FeatureVector
@@ -236,7 +241,9 @@ var _ lnpeer.Peer = (*peer)(nil)
 func newPeer(conn net.Conn, connReq *connmgr.ConnReq, server *server,
 	addr *lnwire.NetAddress, inbound bool,
 	localFeatures *lnwire.RawFeatureVector,
-	chanActiveTimeout time.Duration) (*peer, error) {
+	chanActiveTimeout time.Duration,
+	finalCltvRejectDelta, outgoingCltvRejectDelta uint32) (
+	*peer, error) {
 
 	nodePub := addr.IdentityKey
 
@@ -250,6 +257,9 @@ func newPeer(conn net.Conn, connReq *connmgr.ConnReq, server *server,
 		server: server,
 
 		localFeatures: localFeatures,
+
+		finalCltvRejectDelta:    finalCltvRejectDelta,
+		outgoingCltvRejectDelta: outgoingCltvRejectDelta,
 
 		sendQueue:     make(chan outgoingMsg),
 		outgoingQueue: make(chan outgoingMsg),
@@ -381,19 +391,16 @@ func (p *peer) initGossipSync() {
 		srvrLog.Infof("Negotiated chan series queries with %x",
 			p.pubKeyBytes[:])
 
-		// We'll only request channel updates from the remote peer if
-		// its enabled in the config, or we're already getting updates
-		// from enough peers.
-		//
-		// TODO(roasbeef): craft s.t. we only get updates from a few
-		// peers
-		recvUpdates := !cfg.NoChanUpdates
-
 		// Register the this peer's for gossip syncer with the gossiper.
 		// This is blocks synchronously to ensure the gossip syncer is
 		// registered with the gossiper before attempting to read
 		// messages from the remote peer.
-		p.server.authGossiper.InitSyncState(p, recvUpdates)
+		//
+		// TODO(wilmer): Only sync updates from non-channel peers. This
+		// requires an improved version of the current network
+		// bootstrapper to ensure we can find and connect to non-channel
+		// peers.
+		p.server.authGossiper.InitSyncState(p)
 
 	// If the remote peer has the initial sync feature bit set, then we'll
 	// being the synchronization protocol to exchange authenticated channel
@@ -438,7 +445,12 @@ func (p *peer) loadActiveChannels(chans []*channeldb.OpenChannel) error {
 
 		// Skip adding any permanently irreconcilable channels to the
 		// htlcswitch.
-		if dbChan.ChanStatus() != channeldb.ChanStatusDefault {
+		switch {
+		case dbChan.HasChanStatus(channeldb.ChanStatusBorked):
+			fallthrough
+		case dbChan.HasChanStatus(channeldb.ChanStatusCommitBroadcasted):
+			fallthrough
+		case dbChan.HasChanStatus(channeldb.ChanStatusLocalDataLoss):
 			peerLog.Warnf("ChannelPoint(%v) has status %v, won't "+
 				"start.", chanPoint, dbChan.ChanStatus())
 			continue
@@ -579,14 +591,16 @@ func (p *peer) addLink(chanPoint *wire.OutPoint,
 				*chanPoint, signals,
 			)
 		},
-		OnChannelFailure:    onChannelFailure,
-		SyncStates:          syncStates,
-		BatchTicker:         ticker.New(50 * time.Millisecond),
-		FwdPkgGCTicker:      ticker.New(time.Minute),
-		BatchSize:           10,
-		UnsafeReplay:        cfg.UnsafeReplay,
-		MinFeeUpdateTimeout: htlcswitch.DefaultMinLinkFeeUpdateTimeout,
-		MaxFeeUpdateTimeout: htlcswitch.DefaultMaxLinkFeeUpdateTimeout,
+		OnChannelFailure:        onChannelFailure,
+		SyncStates:              syncStates,
+		BatchTicker:             ticker.New(50 * time.Millisecond),
+		FwdPkgGCTicker:          ticker.New(time.Minute),
+		BatchSize:               10,
+		UnsafeReplay:            cfg.UnsafeReplay,
+		MinFeeUpdateTimeout:     htlcswitch.DefaultMinLinkFeeUpdateTimeout,
+		MaxFeeUpdateTimeout:     htlcswitch.DefaultMaxLinkFeeUpdateTimeout,
+		FinalCltvRejectDelta:    p.finalCltvRejectDelta,
+		OutgoingCltvRejectDelta: p.outgoingCltvRejectDelta,
 	}
 
 	link := htlcswitch.NewChannelLink(linkCfg, lnChan)
@@ -638,7 +652,7 @@ func (p *peer) Disconnect(reason error) {
 
 // String returns the string representation of this peer.
 func (p *peer) String() string {
-	return p.conn.RemoteAddr().String()
+	return fmt.Sprintf("%x@%s", p.pubKeyBytes, p.conn.RemoteAddr())
 }
 
 // readNextMessage reads, and returns the next message on the wire along with
@@ -1005,7 +1019,12 @@ func (p *peer) readHandler() {
 out:
 	for atomic.LoadInt32(&p.disconnect) == 0 {
 		nextMsg, err := p.readNextMessage()
-		idleTimer.Stop()
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
 		if err != nil {
 			peerLog.Infof("unable to read message from %v: %v",
 				p, err)
@@ -1381,16 +1400,58 @@ func (p *peer) logWireMessage(msg lnwire.Message, read bool) {
 	}))
 }
 
-// writeMessage writes the target lnwire.Message to the remote peer.
+// writeMessage writes and flushes the target lnwire.Message to the remote peer.
+// If the passed message is nil, this method will only try to flush an existing
+// message buffered on the connection. It is safe to recall this method with a
+// nil message iff a timeout error is returned. This will continue to flush the
+// pending message to the wire.
 func (p *peer) writeMessage(msg lnwire.Message) error {
 	// Simply exit if we're shutting down.
 	if atomic.LoadInt32(&p.disconnect) != 0 {
-		return ErrPeerExiting
+		return lnpeer.ErrPeerExiting
 	}
 
-	p.logWireMessage(msg, false)
+	// Only log the message on the first attempt.
+	if msg != nil {
+		p.logWireMessage(msg, false)
+	}
 
-	var n int
+	noiseConn, ok := p.conn.(*brontide.Conn)
+	if !ok {
+		return fmt.Errorf("brontide.Conn required to write messages")
+	}
+
+	flushMsg := func() error {
+		// Ensure the write deadline is set before we attempt to send
+		// the message.
+		writeDeadline := time.Now().Add(writeMessageTimeout)
+		err := noiseConn.SetWriteDeadline(writeDeadline)
+		if err != nil {
+			return err
+		}
+
+		// Flush the pending message to the wire. If an error is
+		// encountered, e.g. write timeout, the number of bytes written
+		// so far will be returned.
+		n, err := noiseConn.Flush()
+
+		// Record the number of bytes written on the wire, if any.
+		if n > 0 {
+			atomic.AddUint64(&p.bytesSent, uint64(n))
+		}
+
+		return err
+	}
+
+	// If the current message has already been serialized, encrypted, and
+	// buffered on the underlying connection we will skip straight to
+	// flushing it to the wire.
+	if msg == nil {
+		return flushMsg()
+	}
+
+	// Otherwise, this is a new message. We'll acquire a write buffer to
+	// serialize the message and buffer the ciphertext on the connection.
 	err := p.writePool.Submit(func(buf *bytes.Buffer) error {
 		// Using a buffer allocated by the write pool, encode the
 		// message directly into the buffer.
@@ -1399,25 +1460,17 @@ func (p *peer) writeMessage(msg lnwire.Message) error {
 			return writeErr
 		}
 
-		// Ensure the write deadline is set before we attempt to send
-		// the message.
-		writeDeadline := time.Now().Add(writeMessageTimeout)
-		writeErr = p.conn.SetWriteDeadline(writeDeadline)
-		if writeErr != nil {
-			return writeErr
-		}
-
-		// Finally, write the message itself in a single swoop.
-		n, writeErr = p.conn.Write(buf.Bytes())
-		return writeErr
+		// Finally, write the message itself in a single swoop. This
+		// will buffer the ciphertext on the underlying connection. We
+		// will defer flushing the message until the write pool has been
+		// released.
+		return noiseConn.WriteMessage(buf.Bytes())
 	})
-
-	// Record the number of bytes written on the wire, if any.
-	if n > 0 {
-		atomic.AddUint64(&p.bytesSent, uint64(n))
+	if err != nil {
+		return err
 	}
 
-	return err
+	return flushMsg()
 }
 
 // writeHandler is a goroutine dedicated to reading messages off of an incoming
@@ -1427,29 +1480,71 @@ func (p *peer) writeMessage(msg lnwire.Message) error {
 //
 // NOTE: This method MUST be run as a goroutine.
 func (p *peer) writeHandler() {
+	// We'll stop the timer after a new messages is sent, and also reset it
+	// after we process the next message.
+	idleTimer := time.AfterFunc(idleTimeout, func() {
+		err := fmt.Errorf("Peer %s no write for %s -- disconnecting",
+			p, idleTimeout)
+		p.Disconnect(err)
+	})
+
 	var exitErr error
 
 out:
 	for {
 		select {
 		case outMsg := <-p.sendQueue:
-			switch outMsg.msg.(type) {
 			// If we're about to send a ping message, then log the
 			// exact time in which we send the message so we can
 			// use the delay as a rough estimate of latency to the
 			// remote peer.
-			case *lnwire.Ping:
+			if _, ok := outMsg.msg.(*lnwire.Ping); ok {
 				// TODO(roasbeef): do this before the write?
 				// possibly account for processing within func?
 				now := time.Now().UnixNano()
 				atomic.StoreInt64(&p.pingLastSend, now)
 			}
 
-			// Write out the message to the socket, responding with
-			// error if `errChan` is non-nil. The `errChan` allows
-			// callers to optionally synchronize sends with the
-			// writeHandler.
+			// Record the time at which we first attempt to send the
+			// message.
+			startTime := time.Now()
+
+		retry:
+			// Write out the message to the socket. If a timeout
+			// error is encountered, we will catch this and retry
+			// after backing off in case the remote peer is just
+			// slow to process messages from the wire.
 			err := p.writeMessage(outMsg.msg)
+			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
+				peerLog.Debugf("Write timeout detected for "+
+					"peer %s, first write for message "+
+					"attempted %v ago", p,
+					time.Since(startTime))
+
+				// If we received a timeout error, this implies
+				// that the message was buffered on the
+				// connection successfully and that a flush was
+				// attempted. We'll set the message to nil so
+				// that on a subsequent pass we only try to
+				// flush the buffered message, and forgo
+				// reserializing or reencrypting it.
+				outMsg.msg = nil
+
+				goto retry
+			}
+
+			// The write succeeded, reset the idle timer to prevent
+			// us from disconnecting the peer.
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(idleTimeout)
+
+			// If the peer requested a synchronous write, respond
+			// with the error.
 			if outMsg.errChan != nil {
 				outMsg.errChan <- err
 			}
@@ -1461,7 +1556,7 @@ out:
 			}
 
 		case <-p.quit:
-			exitErr = ErrPeerExiting
+			exitErr = lnpeer.ErrPeerExiting
 			break out
 		}
 	}
@@ -1593,7 +1688,7 @@ func (p *peer) queue(priority bool, msg lnwire.Message, errChan chan error) {
 	case <-p.quit:
 		peerLog.Tracef("Peer shutting down, could not enqueue msg.")
 		if errChan != nil {
-			errChan <- ErrPeerExiting
+			errChan <- lnpeer.ErrPeerExiting
 		}
 	}
 }
@@ -2406,7 +2501,7 @@ func (p *peer) sendMessage(sync, priority bool, msgs ...lnwire.Message) error {
 		case err := <-errChan:
 			return err
 		case <-p.quit:
-			return ErrPeerExiting
+			return lnpeer.ErrPeerExiting
 		}
 	}
 
@@ -2452,7 +2547,7 @@ func (p *peer) AddNewChannel(channel *channeldb.OpenChannel,
 	case <-cancel:
 		return errors.New("canceled adding new channel")
 	case <-p.quit:
-		return ErrPeerExiting
+		return lnpeer.ErrPeerExiting
 	}
 
 	// We pause here to wait for the peer to recognize the new channel
@@ -2461,7 +2556,7 @@ func (p *peer) AddNewChannel(channel *channeldb.OpenChannel,
 	case err := <-errChan:
 		return err
 	case <-p.quit:
-		return ErrPeerExiting
+		return lnpeer.ErrPeerExiting
 	}
 }
 

@@ -19,7 +19,7 @@ import (
 	"github.com/wakiyamap/lnd/contractcourt"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/wakiyamap/lnd/ticker"
+	"github.com/lightningnetwork/lnd/ticker"
 )
 
 const (
@@ -799,6 +799,23 @@ func (s *Switch) handleLocalDispatch(pkt *htlcPacket) error {
 			}
 		}
 
+		// Ensure that the htlc satisfies the outgoing channel policy.
+		currentHeight := atomic.LoadUint32(&s.bestHeight)
+		htlcErr := link.HtlcSatifiesPolicyLocal(
+			htlc.PaymentHash,
+			htlc.Amount,
+			htlc.Expiry, currentHeight,
+		)
+		if htlcErr != nil {
+			log.Errorf("Link %v policy for local forward not "+
+				"satisfied", pkt.outgoingChanID)
+
+			return &ForwardingError{
+				ErrorSource:    s.cfg.SelfKey,
+				FailureMessage: htlcErr,
+			}
+		}
+
 		if link.Bandwidth() < htlc.Amount {
 			err := fmt.Errorf("Link %v has insufficient capacity: "+
 				"need %v, has %v", pkt.outgoingChanID,
@@ -939,7 +956,7 @@ func (s *Switch) parseFailedPayment(payment *pendingPayment, pkt *htlcPacket,
 	// The payment never cleared the link, so we don't need to
 	// decrypt the error, simply decode it them report back to the
 	// user.
-	case pkt.localFailure:
+	case pkt.localFailure || pkt.convertedError:
 		var userErr string
 		r := bytes.NewReader(htlc.Reason)
 		failureMsg, err := lnwire.DecodeFailure(r, 0)
@@ -1038,7 +1055,8 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 
 			return s.failAddPacket(packet, failure, addErr)
 		}
-		interfaceLinks, _ := s.getLinks(targetLink.Peer().PubKey())
+		targetPeerKey := targetLink.Peer().PubKey()
+		interfaceLinks, _ := s.getLinks(targetPeerKey)
 		s.indexMtx.RUnlock()
 
 		// We'll keep track of any HTLC failures during the link
@@ -1105,7 +1123,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 
 			addErr := fmt.Errorf("unable to find appropriate "+
 				"channel link insufficient capacity, need "+
-				"%v", htlc.Amount)
+				"%v towards node=%x", htlc.Amount, targetPeerKey)
 
 			return s.failAddPacket(packet, failure, addErr)
 
@@ -1154,13 +1172,12 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 		fail, isFail := htlc.(*lnwire.UpdateFailHTLC)
 		if isFail && !packet.hasSource {
 			switch {
+			// No message to encrypt, locally sourced payment.
 			case circuit.ErrorEncrypter == nil:
-				// No message to encrypt, locally sourced
-				// payment.
 
+			// If this is a resolution message, then we'll need to
+			// encrypt it as it's actually internally sourced.
 			case packet.isResolution:
-				// If this is a resolution message, then we'll need to encrypt
-				// it as it's actually internally sourced.
 				var err error
 				// TODO(roasbeef): don't need to pass actually?
 				failure := &lnwire.FailPermanentChannelFailure{}
@@ -1173,6 +1190,25 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 					log.Error(err)
 				}
 
+			// Alternatively, if the remote party send us an
+			// UpdateFailMalformedHTLC, then we'll need to convert
+			// this into a proper well formatted onion error as
+			// there's no HMAC currently.
+			case packet.convertedError:
+				log.Infof("Converting malformed HTLC error "+
+					"for circuit for Circuit(%x: "+
+					"(%s, %d) <-> (%s, %d))", packet.circuit.PaymentHash,
+					packet.incomingChanID, packet.incomingHTLCID,
+					packet.outgoingChanID, packet.outgoingHTLCID)
+
+				fail.Reason = circuit.ErrorEncrypter.EncryptMalformedError(
+					fail.Reason,
+				)
+				if err != nil {
+					err = fmt.Errorf("unable to obfuscate "+
+						"error: %v", err)
+					log.Error(err)
+				}
 			default:
 				// Otherwise, it's a forwarded error, so we'll perform a
 				// wrapper encryption as normal.

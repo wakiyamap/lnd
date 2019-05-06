@@ -1,4 +1,4 @@
-package main
+package lnd
 
 import (
 	"encoding/hex"
@@ -37,7 +37,7 @@ const (
 	defaultBitcoinMinHTLCMSat   = lnwire.MilliSatoshi(1000)
 	defaultBitcoinBaseFeeMSat   = lnwire.MilliSatoshi(1000)
 	defaultBitcoinFeeRate       = lnwire.MilliSatoshi(1)
-	defaultBitcoinTimeLockDelta = 144
+	defaultBitcoinTimeLockDelta = 40
 
 	defaultMonacoinMinHTLCMSat   = lnwire.MilliSatoshi(1000)
 	defaultMonacoinBaseFeeMSat   = lnwire.MilliSatoshi(1000)
@@ -108,7 +108,7 @@ type chainControl struct {
 
 	signer input.Signer
 
-	keyRing keychain.KeyRing
+	keyRing keychain.SecretKeyRing
 
 	wc lnwallet.WalletController
 
@@ -132,7 +132,7 @@ type chainControl struct {
 func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 	privateWalletPw, publicWalletPw []byte, birthday time.Time,
 	recoveryWindow uint32, wallet *wallet.Wallet,
-	neutrinoCS *neutrino.ChainService) (*chainControl, func(), error) {
+	neutrinoCS *neutrino.ChainService) (*chainControl, error) {
 
 	// Set the RPC config from the "home" chain. Multi-chain isn't yet
 	// active, so we'll restrict usage to a particular chain for now.
@@ -167,8 +167,8 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 			defaultMonacoinStaticFeePerKW, 0,
 		)
 	default:
-		return nil, nil, fmt.Errorf("Default routing policy for "+
-			"chain %v is unknown", registeredChains.PrimaryChain())
+		return nil, fmt.Errorf("Default routing policy for chain %v is "+
+			"unknown", registeredChains.PrimaryChain())
 	}
 
 	walletConfig := &btcwallet.Config{
@@ -178,20 +178,16 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 		RecoveryWindow: recoveryWindow,
 		DataDir:        homeChainConfig.ChainDir,
 		NetParams:      activeNetParams.Params,
-		FeeEstimator:   cc.feeEstimator,
 		CoinType:       activeNetParams.CoinType,
 		Wallet:         wallet,
 	}
 
-	var (
-		err     error
-		cleanUp func()
-	)
+	var err error
 
 	// Initialize the height hint cache within the chain directory.
 	hintCache, err := chainntnfs.NewHeightHintCache(chanDB)
 	if err != nil {
-		return nil, nil, fmt.Errorf("unable to initialize height hint "+
+		return nil, fmt.Errorf("unable to initialize height hint "+
 			"cache: %v", err)
 	}
 
@@ -208,9 +204,26 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 		)
 		cc.chainView, err = chainview.NewCfFilteredChainView(neutrinoCS)
 		if err != nil {
-			cleanUp()
-			return nil, nil, err
+			return nil, err
 		}
+
+		// If the user provided an API for fee estimation, activate it now.
+		if cfg.NeutrinoMode.FeeURL != "" {
+			ltndLog.Infof("Using API fee estimator!")
+
+			estimator := lnwallet.NewWebAPIFeeEstimator(
+				lnwallet.SparseConfFeeSource{
+					URL: cfg.NeutrinoMode.FeeURL,
+				},
+				defaultBitcoinStaticFeePerKW,
+			)
+
+			if err := estimator.Start(); err != nil {
+				return nil, err
+			}
+			cc.feeEstimator = estimator
+		}
+
 		walletConfig.ChainSource = chain.NewNeutrinoClient(
 			activeNetParams.Params, neutrinoCS,
 		)
@@ -237,15 +250,20 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 			// this back to the btcwallet/bitcoind port.
 			rpcPort, err := strconv.Atoi(activeNetParams.rpcPort)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 			rpcPort -= 2
 			bitcoindHost = fmt.Sprintf("%v:%d",
 				bitcoindMode.RPCHost, rpcPort)
-			if cfg.Bitcoin.Active && cfg.Bitcoin.RegTest {
+			if (cfg.Bitcoin.Active && cfg.Bitcoin.RegTest) ||
+				(cfg.Monacoin.Active && cfg.Monacoin.RegTest) {
 				conn, err := net.Dial("tcp", bitcoindHost)
 				if err != nil || conn == nil {
-					rpcPort = 18443
+					if cfg.Bitcoin.Active && cfg.Bitcoin.RegTest {
+						rpcPort = 18443
+					} else if cfg.Monacoin.Active && cfg.Monacoin.RegTest {
+						rpcPort = 19443
+					}
 					bitcoindHost = fmt.Sprintf("%v:%d",
 						bitcoindMode.RPCHost,
 						rpcPort)
@@ -264,12 +282,12 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 			100*time.Millisecond,
 		)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 
 		if err := bitcoindConn.Start(); err != nil {
-			return nil, nil, fmt.Errorf("unable to connect to "+
-				"bitcoind: %v", err)
+			return nil, fmt.Errorf("unable to connect to bitcoind: "+
+				"%v", err)
 		}
 
 		cc.chainNotifier = bitcoindnotify.New(
@@ -301,12 +319,12 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 				*rpcConfig, fallBackFeeRate.FeePerKWeight(),
 			)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 			if err := cc.feeEstimator.Start(); err != nil {
-				return nil, nil, err
+				return nil, err
 			}
-		} else if cfg.Monacoin.Active {
+		} else if cfg.Monacoin.Active && !cfg.Monacoin.RegTest {
 			ltndLog.Infof("Initializing monacoind backed fee estimator")
 
 			// Finally, we'll re-initialize the fee estimator, as
@@ -318,10 +336,10 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 				*rpcConfig, fallBackFeeRate.FeePerKWeight(),
 			)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 			if err := cc.feeEstimator.Start(); err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 		}
 	case "btcd", "monad":
@@ -342,19 +360,19 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 		if btcdMode.RawRPCCert != "" {
 			rpcCert, err = hex.DecodeString(btcdMode.RawRPCCert)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 		} else {
 			certFile, err := os.Open(btcdMode.RPCCert)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 			rpcCert, err = ioutil.ReadAll(certFile)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 			if err := certFile.Close(); err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 		}
 
@@ -386,7 +404,7 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 			rpcConfig, activeNetParams.Params, hintCache, hintCache,
 		)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 
 		// Finally, we'll create an instance of the default chain view to be
@@ -394,7 +412,7 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 		cc.chainView, err = chainview.NewBtcdFilteredChainView(*rpcConfig)
 		if err != nil {
 			srvrLog.Errorf("unable to create chain view: %v", err)
-			return nil, nil, err
+			return nil, err
 		}
 
 		// Create a special websockets rpc client for btcd which will be used
@@ -402,7 +420,7 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 		chainRPC, err := chain.NewRPCClient(activeNetParams.Params, btcdHost,
 			btcdUser, btcdPass, rpcCert, false, 20)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 
 		walletConfig.ChainSource = chainRPC
@@ -423,24 +441,21 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 				*rpcConfig, fallBackFeeRate.FeePerKWeight(),
 			)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 			if err := cc.feeEstimator.Start(); err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 		}
 	default:
-		return nil, nil, fmt.Errorf("unknown node type: %s",
+		return nil, fmt.Errorf("unknown node type: %s",
 			homeChainConfig.Node)
 	}
 
 	wc, err := btcwallet.New(*walletConfig)
 	if err != nil {
 		fmt.Printf("unable to create wallet controller: %v\n", err)
-		if cleanUp != nil {
-			cleanUp()
-		}
-		return nil, nil, err
+		return nil, err
 	}
 
 	cc.msgSigner = wc
@@ -475,24 +490,18 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
 	lnWallet, err := lnwallet.NewLightningWallet(walletCfg)
 	if err != nil {
 		fmt.Printf("unable to create wallet: %v\n", err)
-		if cleanUp != nil {
-			cleanUp()
-		}
-		return nil, nil, err
+		return nil, err
 	}
 	if err := lnWallet.Startup(); err != nil {
 		fmt.Printf("unable to start wallet: %v\n", err)
-		if cleanUp != nil {
-			cleanUp()
-		}
-		return nil, nil, err
+		return nil, err
 	}
 
 	ltndLog.Info("LightningWallet opened")
 
 	cc.wallet = lnWallet
 
-	return cc, cleanUp, nil
+	return cc, nil
 }
 
 var (
@@ -721,7 +730,7 @@ func initNeutrinoBackend(chainDir string) (*neutrino.ChainService, func(), error
 	}
 
 	neutrino.MaxPeers = 8
-	neutrino.BanDuration = 5 * time.Second
+	neutrino.BanDuration = time.Hour * 48
 
 	neutrinoCS, err := neutrino.NewChainService(config)
 	if err != nil {
@@ -729,13 +738,14 @@ func initNeutrinoBackend(chainDir string) (*neutrino.ChainService, func(), error
 			"client: %v", err)
 	}
 
-	cleanUp := func() {
-		db.Close()
-		neutrinoCS.Stop()
-	}
 	if err := neutrinoCS.Start(); err != nil {
-		cleanUp()
+		db.Close()
 		return nil, nil, err
+	}
+
+	cleanUp := func() {
+		neutrinoCS.Stop()
+		db.Close()
 	}
 
 	return neutrinoCS, cleanUp, nil

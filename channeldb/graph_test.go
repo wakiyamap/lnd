@@ -362,7 +362,7 @@ func TestEdgeInsertionDeletion(t *testing.T) {
 
 	// Next, attempt to delete the edge from the database, again this
 	// should proceed without any issues.
-	if err := graph.DeleteChannelEdge(&outpoint); err != nil {
+	if err := graph.DeleteChannelEdges(chanID); err != nil {
 		t.Fatalf("unable to delete edge: %v", err)
 	}
 
@@ -374,10 +374,14 @@ func TestEdgeInsertionDeletion(t *testing.T) {
 	if _, _, _, err := graph.FetchChannelEdgesByID(chanID); err == nil {
 		t.Fatalf("channel edge not deleted")
 	}
+	isZombie, _, _ := graph.IsZombieEdge(chanID)
+	if !isZombie {
+		t.Fatal("channel edge not marked as zombie")
+	}
 
 	// Finally, attempt to delete a (now) non-existent edge within the
 	// database, this should result in an error.
-	err = graph.DeleteChannelEdge(&outpoint)
+	err = graph.DeleteChannelEdges(chanID)
 	if err != ErrEdgeNotFound {
 		t.Fatalf("deleting a non-existent edge should fail!")
 	}
@@ -522,28 +526,37 @@ func TestDisconnectBlockAtHeight(t *testing.T) {
 	}
 
 	// The two first edges should be removed from the db.
-	_, _, has, err := graph.HasChannelEdge(edgeInfo.ChannelID)
+	_, _, has, isZombie, err := graph.HasChannelEdge(edgeInfo.ChannelID)
 	if err != nil {
 		t.Fatalf("unable to query for edge: %v", err)
 	}
 	if has {
 		t.Fatalf("edge1 was not pruned from the graph")
 	}
-	_, _, has, err = graph.HasChannelEdge(edgeInfo2.ChannelID)
+	if isZombie {
+		t.Fatal("reorged edge1 should not be marked as zombie")
+	}
+	_, _, has, isZombie, err = graph.HasChannelEdge(edgeInfo2.ChannelID)
 	if err != nil {
 		t.Fatalf("unable to query for edge: %v", err)
 	}
 	if has {
 		t.Fatalf("edge2 was not pruned from the graph")
 	}
+	if isZombie {
+		t.Fatal("reorged edge2 should not be marked as zombie")
+	}
 
 	// Edge 3 should not be removed.
-	_, _, has, err = graph.HasChannelEdge(edgeInfo3.ChannelID)
+	_, _, has, isZombie, err = graph.HasChannelEdge(edgeInfo3.ChannelID)
 	if err != nil {
 		t.Fatalf("unable to query for edge: %v", err)
 	}
 	if !has {
 		t.Fatalf("edge3 was pruned from the graph")
+	}
+	if isZombie {
+		t.Fatal("edge3 was marked as zombie")
 	}
 
 	// PruneTip should be set to the blockHash we specified for the block
@@ -755,11 +768,15 @@ func TestEdgeInfoUpdates(t *testing.T) {
 
 	// Check for existence of the edge within the database, it should be
 	// found.
-	_, _, found, err := graph.HasChannelEdge(chanID)
+	_, _, found, isZombie, err := graph.HasChannelEdge(chanID)
 	if err != nil {
 		t.Fatalf("unable to query for edge: %v", err)
-	} else if !found {
+	}
+	if !found {
 		t.Fatalf("graph should have of inserted edge")
+	}
+	if isZombie {
+		t.Fatal("live edge should not be marked as zombie")
 	}
 
 	// We should also be able to retrieve the channelID only knowing the
@@ -1724,6 +1741,23 @@ func TestFilterKnownChanIDs(t *testing.T) {
 		chanIDs = append(chanIDs, chanID.ToUint64())
 	}
 
+	const numZombies = 5
+	zombieIDs := make([]uint64, 0, numZombies)
+	for i := 0; i < numZombies; i++ {
+		channel, chanID := createEdge(
+			uint32(i*10+1), 0, 0, 0, node1, node2,
+		)
+		if err := graph.AddChannelEdge(&channel); err != nil {
+			t.Fatalf("unable to create channel edge: %v", err)
+		}
+		err := graph.DeleteChannelEdges(channel.ChannelID)
+		if err != nil {
+			t.Fatalf("unable to mark edge zombie: %v", err)
+		}
+
+		zombieIDs = append(zombieIDs, chanID.ToUint64())
+	}
+
 	queryCases := []struct {
 		queryIDs []uint64
 
@@ -1733,6 +1767,11 @@ func TestFilterKnownChanIDs(t *testing.T) {
 		// response should be the empty set.
 		{
 			queryIDs: chanIDs,
+		},
+		// If we attempt to filter out all zombies that we know of, the
+		// response should be the empty set.
+		{
+			queryIDs: zombieIDs,
 		},
 
 		// If we query for a set of ID's that we didn't insert, we
@@ -1965,6 +2004,24 @@ func TestFetchChanInfos(t *testing.T) {
 
 		edgeQuery = append(edgeQuery, chanID.ToUint64())
 	}
+
+	// Add an additional edge that does not exist. The query should skip
+	// this channel and return only infos for the edges that exist.
+	edgeQuery = append(edgeQuery, 500)
+
+	// Add an another edge to the query that has been marked as a zombie
+	// edge. The query should also skip this channel.
+	zombieChan, zombieChanID := createEdge(
+		666, 0, 0, 0, node1, node2,
+	)
+	if err := graph.AddChannelEdge(&zombieChan); err != nil {
+		t.Fatalf("unable to create channel edge: %v", err)
+	}
+	err = graph.DeleteChannelEdges(zombieChan.ChannelID)
+	if err != nil {
+		t.Fatalf("unable to delete and mark edge zombie: %v", err)
+	}
+	edgeQuery = append(edgeQuery, zombieChanID.ToUint64())
 
 	// We'll now attempt to query for the range of channel ID's we just
 	// inserted into the database. We should get the exact same set of
@@ -2577,7 +2634,7 @@ func TestNodeIsPublic(t *testing.T) {
 	// graph. This will make Alice be seen as a private node as it no longer
 	// has any advertised edges.
 	for _, graph := range graphs {
-		err := graph.DeleteChannelEdge(&aliceBobEdge.ChannelPoint)
+		err := graph.DeleteChannelEdges(aliceBobEdge.ChannelID)
 		if err != nil {
 			t.Fatalf("unable to remove edge: %v", err)
 		}
@@ -2594,7 +2651,7 @@ func TestNodeIsPublic(t *testing.T) {
 	// completely remove the edge as it is not possible for her to know of
 	// it without it being advertised.
 	for i, graph := range graphs {
-		err := graph.DeleteChannelEdge(&bobCarolEdge.ChannelPoint)
+		err := graph.DeleteChannelEdges(bobCarolEdge.ChannelID)
 		if err != nil {
 			t.Fatalf("unable to remove edge: %v", err)
 		}
@@ -2784,6 +2841,75 @@ func TestEdgePolicyMissingMaxHtcl(t *testing.T) {
 		t.Fatalf("edge doesn't match: %v", err)
 	}
 	assertEdgeInfoEqual(t, dbEdgeInfo, edgeInfo)
+}
+
+// TestGraphZombieIndex ensures that we can mark edges correctly as zombie/live.
+func TestGraphZombieIndex(t *testing.T) {
+	t.Parallel()
+
+	// We'll start by creating our test graph along with a test edge.
+	db, cleanUp, err := makeTestDB()
+	defer cleanUp()
+	if err != nil {
+		t.Fatalf("unable to create test database: %v", err)
+	}
+	graph := db.ChannelGraph()
+
+	node1, err := createTestVertex(db)
+	if err != nil {
+		t.Fatalf("unable to create test vertex: %v", err)
+	}
+	node2, err := createTestVertex(db)
+	if err != nil {
+		t.Fatalf("unable to create test vertex: %v", err)
+	}
+
+	// Swap the nodes if the second's pubkey is smaller than the first.
+	// Without this, the comparisons at the end will fail probabilistically.
+	if bytes.Compare(node2.PubKeyBytes[:], node1.PubKeyBytes[:]) < 0 {
+		node1, node2 = node2, node1
+	}
+
+	edge, _, _ := createChannelEdge(db, node1, node2)
+	if err := graph.AddChannelEdge(edge); err != nil {
+		t.Fatalf("unable to create channel edge: %v", err)
+	}
+
+	// Since the edge is known the graph and it isn't a zombie, IsZombieEdge
+	// should not report the channel as a zombie.
+	isZombie, _, _ := graph.IsZombieEdge(edge.ChannelID)
+	if isZombie {
+		t.Fatal("expected edge to not be marked as zombie")
+	}
+
+	// If we delete the edge and mark it as a zombie, then we should expect
+	// to see it within the index.
+	err = graph.DeleteChannelEdges(edge.ChannelID)
+	if err != nil {
+		t.Fatalf("unable to mark edge as zombie: %v", err)
+	}
+	isZombie, pubKey1, pubKey2 := graph.IsZombieEdge(edge.ChannelID)
+	if !isZombie {
+		t.Fatal("expected edge to be marked as zombie")
+	}
+	if pubKey1 != node1.PubKeyBytes {
+		t.Fatalf("expected pubKey1 %x, got %x", node1.PubKeyBytes,
+			pubKey1)
+	}
+	if pubKey2 != node2.PubKeyBytes {
+		t.Fatalf("expected pubKey2 %x, got %x", node2.PubKeyBytes,
+			pubKey2)
+	}
+
+	// Similarly, if we mark the same edge as live, we should no longer see
+	// it within the index.
+	if err := graph.MarkEdgeLive(edge.ChannelID); err != nil {
+		t.Fatalf("unable to mark edge as live: %v", err)
+	}
+	isZombie, _, _ = graph.IsZombieEdge(edge.ChannelID)
+	if isZombie {
+		t.Fatal("expected edge to not be marked as zombie")
+	}
 }
 
 // compareNodes is used to compare two LightningNodes while excluding the

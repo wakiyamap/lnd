@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wakiyamap/lightning-onion"
+	"github.com/lightningnetwork/lightning-onion"
 	"github.com/wakiyamap/lnd/chainntnfs"
 )
 

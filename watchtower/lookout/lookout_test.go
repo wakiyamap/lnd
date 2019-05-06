@@ -15,6 +15,7 @@ import (
 	"github.com/wakiyamap/lnd/watchtower/blob"
 	"github.com/wakiyamap/lnd/watchtower/lookout"
 	"github.com/wakiyamap/lnd/watchtower/wtdb"
+	"github.com/wakiyamap/lnd/watchtower/wtmock"
 	"github.com/wakiyamap/lnd/watchtower/wtpolicy"
 )
 
@@ -66,7 +67,7 @@ func makeAddrSlice(size int) []byte {
 }
 
 func TestLookoutBreachMatching(t *testing.T) {
-	db := wtdb.NewMockDB()
+	db := wtmock.NewTowerDB()
 
 	// Initialize an mock backend to feed the lookout blocks.
 	backend := lookout.NewMockBackend()

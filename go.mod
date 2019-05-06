@@ -5,18 +5,17 @@ require (
 	github.com/NebulousLabs/fastrand v0.0.0-20180208210444-3cf7173006a0 // indirect
 	github.com/NebulousLabs/go-upnp v0.0.0-20180202185039-29b680b06c82
 	github.com/Yawning/aez v0.0.0-20180114000226-4dad034d9db2
-	github.com/aead/chacha20 v0.0.0-20180709150244-8b13a72661da // indirect
-	github.com/btcsuite/btcd v0.0.0-20190213025234-306aecffea32
+	github.com/btcsuite/btcd v0.0.0-20190426011420-63f50db2f70a
 	github.com/btcsuite/btclog v0.0.0-20170628155309-84c8d2346e9f
-	github.com/btcsuite/btcutil v0.0.0-20190207003914-4c204d697803
-	github.com/btcsuite/btcwallet v0.0.0-20190313041134-68fc7c82e131
+	github.com/btcsuite/btcutil v0.0.0-20190425235716-9e5f4b9a998d
+	github.com/btcsuite/btcwallet v0.0.0-20190424224017-9d95f76e99a7
 	github.com/btcsuite/fastsha256 v0.0.0-20160815193821-637e65642941
 	github.com/coreos/bbolt v1.3.2
 	github.com/davecgh/go-spew v1.1.1
 	github.com/go-errors/errors v1.0.1
 	github.com/golang/protobuf v1.2.0
 	github.com/grpc-ecosystem/grpc-gateway v0.0.0-20170724004829-f2862b476edc
-	github.com/jackpal/gateway v1.0.4
+	github.com/jackpal/gateway v1.0.5
 	github.com/jackpal/go-nat-pmp v0.0.0-20170405195558-28a68d0c24ad
 	github.com/jessevdk/go-flags v1.4.0
 	github.com/jrick/logrotate v1.0.0
@@ -28,14 +27,14 @@ require (
 	github.com/juju/utils v0.0.0-20180820210520-bf9cc5bdd62d // indirect
 	github.com/juju/version v0.0.0-20180108022336-b64dbd566305 // indirect
 	github.com/kkdai/bstream v0.0.0-20181106074824-b3251f7901ec
-	github.com/lightninglabs/neutrino v0.0.0-20190313220016-a6cc2a8361d5
+	github.com/lightninglabs/neutrino v0.0.0-20190426010803-a655679fe131
+	github.com/lightningnetwork/lightning-onion v0.0.0-20190430041606-751fb4dd8b72
+	github.com/lightningnetwork/lnd/queue v1.0.1
+	github.com/lightningnetwork/lnd/ticker v1.0.0
 	github.com/miekg/dns v0.0.0-20171125082028-79bfde677fa8
 	github.com/rogpeppe/fastuuid v0.0.0-20150106093220-6724a57986af // indirect
 	github.com/tv42/zbase32 v0.0.0-20160707012821-501572607d02
 	github.com/urfave/cli v1.18.0
-	github.com/wakiyamap/lightning-onion v0.0.0-20190214194048-7e7b24625864
-	github.com/wakiyamap/lnd/queue v1.0.1
-	github.com/wakiyamap/lnd/ticker v1.0.0
 	github.com/wakiyamap/monad v0.0.0-20190316043608-a9a7a7c9ca5c
 	golang.org/x/crypto v0.0.0-20190211182817-74369b46fc67
 	golang.org/x/net v0.0.0-20190206173232-65e2d4e15006
@@ -48,6 +47,6 @@ require (
 	gopkg.in/mgo.v2 v2.0.0-20180705113604-9856a29383ce // indirect
 )
 
-replace github.com/wakiyamap/lnd/ticker => ./ticker
+replace github.com/lightningnetwork/lnd/ticker => ./ticker
 
-replace github.com/wakiyamap/lnd/queue => ./queue
+replace github.com/lightningnetwork/lnd/queue => ./queue

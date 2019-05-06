@@ -1,4 +1,4 @@
-package main
+package lnd
 
 import (
 	"github.com/btcsuite/btcd/chaincfg"
@@ -54,6 +54,14 @@ var bitcoinSimNetParams = bitcoinNetParams{
 	CoinType: keychain.CoinTypeTestnet,
 }
 
+// monacoinSimNetParams contains parameters specific to the simulation test
+// network.
+var monacoinSimNetParams = monacoinNetParams{
+	Params:   &monacoinCfg.SimNetParams,
+	rpcPort:  "18556",
+	CoinType: keychain.CoinTypeTestnet,
+}
+
 // monacoinTestNetParams contains parameters specific to the 4th version of the
 // test network.
 var monacoinTestNetParams = monacoinNetParams{
@@ -70,8 +78,17 @@ var monacoinMainNetParams = monacoinNetParams{
 	CoinType: keychain.CoinTypeMonacoin,
 }
 
-// regTestNetParams contains parameters specific to a local regtest network.
-var regTestNetParams = bitcoinNetParams{
+// monacoinRegTestNetParams contains parameters specific to a local monacoin
+// regtest network.
+var monacoinRegTestNetParams = monacoinNetParams{
+	Params:   &monacoinCfg.RegressionNetParams,
+	rpcPort:  "18334",
+	CoinType: keychain.CoinTypeTestnet,
+}
+
+// bitcoinRegTestNetParams contains parameters specific to a local bitcoin
+// regtest network.
+var bitcoinRegTestNetParams = bitcoinNetParams{
 	Params:   &bitcoinCfg.RegressionNetParams,
 	rpcPort:  "18334",
 	CoinType: keychain.CoinTypeTestnet,

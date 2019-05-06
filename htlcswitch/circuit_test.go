@@ -9,7 +9,7 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	bitcoinCfg "github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcutil"
-	"github.com/wakiyamap/lightning-onion"
+	"github.com/lightningnetwork/lightning-onion"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/htlcswitch"
 	"github.com/wakiyamap/lnd/lnwire"

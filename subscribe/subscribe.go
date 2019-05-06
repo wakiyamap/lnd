@@ -5,7 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/wakiyamap/lnd/queue"
+	"github.com/lightningnetwork/lnd/queue"
 )
 
 // ErrServerShuttingDown is an error returned in case the server is in the
