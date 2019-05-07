@@ -706,6 +706,9 @@ func loadConfig() (*config, error) {
 					"credentials for monacoind: %v", err)
 				return nil, err
 			}
+		case "neutrino":
+			// No need to get RPC parameters.
+
 		default:
 			str := "%s: only monad and monacoind mode supported for " +
 				"monacoin at this time"

@@ -14,12 +14,12 @@ import (
 	"github.com/btcsuite/btcutil"
 	"github.com/coreos/bbolt"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/lightningnetwork/lnd/ticker"
 	"github.com/wakiyamap/lnd/chainntnfs"
 	"github.com/wakiyamap/lnd/channeldb"
 	"github.com/wakiyamap/lnd/contractcourt"
 	"github.com/wakiyamap/lnd/lnwallet"
 	"github.com/wakiyamap/lnd/lnwire"
-	"github.com/lightningnetwork/lnd/ticker"
 )
 
 const (

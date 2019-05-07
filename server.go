@@ -26,6 +26,7 @@ import (
 	"github.com/go-errors/errors"
 
 	sphinx "github.com/lightningnetwork/lightning-onion"
+	"github.com/lightningnetwork/lnd/ticker"
 	"github.com/wakiyamap/lnd/autopilot"
 	"github.com/wakiyamap/lnd/brontide"
 	"github.com/wakiyamap/lnd/chanbackup"
@@ -47,7 +48,6 @@ import (
 	"github.com/wakiyamap/lnd/routing"
 	"github.com/wakiyamap/lnd/routing/route"
 	"github.com/wakiyamap/lnd/sweep"
-	"github.com/lightningnetwork/lnd/ticker"
 	"github.com/wakiyamap/lnd/tor"
 	"github.com/wakiyamap/lnd/walletunlocker"
 	"github.com/wakiyamap/lnd/zpay32"
