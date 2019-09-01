@@ -1,3 +1,8 @@
+## Attention
+This repository is old.
+Please use the following URL for monacoin's LND.
+https://github.com/monasuite/lnd
+
 ## Lightning Network Daemon
 
 [![Build Status](http://img.shields.io/travis/wakiyamap/lnd.svg)](https://travis-ci.org/wakiyamap/lnd) 
